@@ -121,16 +121,25 @@ class VaultStore:
         return sorted(self.backup_dir.glob("vault-*.json"), reverse=True)
 
     def restore(self, backup: Path) -> None:
-        """Remplace le coffre par une sauvegarde (l'état actuel est sauvegardé avant)."""
+        """Échange le coffre et une sauvegarde : l'état actuel prend la place de la sauvegarde restaurée.
+
+        Aucune version n'est jamais perdue, même après des restaurations répétées.
+        """
         backup = Path(backup)
         if backup.parent.resolve() != self.backup_dir.resolve() or not backup.exists():
             raise FileNotFoundError("Sauvegarde introuvable")
         content = backup.read_bytes()
         if self.path.exists():
-            self._backup_current()
+            current = self.path.read_bytes()
+            others = [b for b in self.list_backups() if b != backup]
+            if not any(b.read_bytes() == current for b in others):
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                self.backup_dir.mkdir(parents=True, exist_ok=True)
+                (self.backup_dir / f"vault-{stamp}.json").write_bytes(current)
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_bytes(content)
         os.replace(tmp, self.path)
+        backup.unlink(missing_ok=True)
         self.vault = None
 
     # ---------- verrou ----------

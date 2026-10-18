@@ -155,3 +155,17 @@ def test_reload_autre_cle_refuse(tmp_path):
     (tmp_path / "vault.json").write_bytes((tmp_path / "autre" / "vault.json").read_bytes())
     with pytest.raises(CryptoError):
         s.reload()
+
+
+def test_restaurations_repetees_gardent_la_derniere_version(tmp_path):
+    s = VaultStore(tmp_path / "vault.json")
+    for i in range(7):  # 7 versions différentes
+        v = sample_vault()
+        v.accounts[0].name = f"version{i}"
+        s.save(v)
+    for _ in range(6):  # restaurer sans cesse la plus ancienne sauvegarde
+        s.restore(s.list_backups()[-1])
+    fichiers = [*s.list_backups(), tmp_path / "vault.json"]
+    noms = {VaultStore(b).load(None).accounts[0].name for b in fichiers}
+    assert "version6" in noms  # la dernière version enregistrée n'a pas été perdue
+    assert len(s.list_backups()) == 5
