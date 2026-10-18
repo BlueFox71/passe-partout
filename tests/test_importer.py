@@ -66,3 +66,29 @@ def test_reimport_n_ajoute_que_les_absents(xlsx, vault):
     added, skipped = import_xlsx(xlsx, vault, "p1")
     assert by_name(vault, "Boursorama").password == "change"
     assert (added, skipped) == (1, len(ROWS))
+
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.importer import cell_text  # noqa: E402
+
+
+def cell(value, fmt="General"):
+    return SimpleNamespace(value=value, number_format=fmt)
+
+
+@pytest.mark.parametrize("value,fmt,expected", [
+    (612345678, "00 00 00 00 00", "06 12 34 56 78"),
+    (612345678, "0#########", "0612345678"),
+    (42, '"FR"0000', "FR0042"),
+    (12.5, "0.00", "12,50"),
+    (0.1 + 0.2, "General", "0,3"),
+    (0.5, "0%", "50%"),
+    (1234, "#,##0", "1234"),
+    (1234, '_-* #,##0_-;\-* #,##0_-;_-* "-"??_-;_-@_-', "1234"),
+    (6092597, "00000000", "06092597"),
+    (29017110, "General", "29017110"),
+    (-7, "0", "-7"),
+])
+def test_cell_text_formats(value, fmt, expected):
+    assert cell_text(cell(value, fmt)) == expected

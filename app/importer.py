@@ -21,8 +21,98 @@ CARD_HEADERS = {"carte cadeaux": "name", "carte cadeau": "name", "code": "code",
                 "montant restant": "remaining", "date fin": "end_date"}
 
 
+def _general(v: float) -> str:
+    """Affichage « Standard » d'Excel : 15 chiffres significatifs, virgule décimale."""
+    if float(v).is_integer():
+        return str(int(v))
+    return f"{v:.15g}".replace(".", ",")
+
+
+def _tokens(section: str) -> list[tuple[str, str]] | None:
+    """Découpe une section de format en jetons ('ph', '0'|'#'|'?'), ('dot', '.'), ('lit', texte).
+
+    Renvoie None si le format contient des éléments non gérés (dates, exposants…).
+    """
+    out, i = [], 0
+    while i < len(section):
+        ch = section[i]
+        if ch == '"':
+            j = section.find('"', i + 1)
+            j = len(section) if j < 0 else j
+            out.append(("lit", section[i + 1:j]))
+            i = j + 1
+            continue
+        if ch == "\\" and i + 1 < len(section):
+            out.append(("lit", section[i + 1]))
+            i += 2
+            continue
+        if ch in "_*":  # espacement / remplissage : sans effet sur le texte
+            i += 2
+            continue
+        if ch in "0#?":
+            out.append(("ph", ch))
+        elif ch == ".":
+            out.append(("dot", "."))
+        elif ch == ",":
+            pass  # séparateur de milliers : ignoré (on garde les chiffres bruts)
+        elif ch == "[":
+            j = section.find("]", i)
+            i = len(section) if j < 0 else j + 1
+            continue
+        elif ch.lower() in "dmyhse@":
+            return None
+        else:
+            out.append(("lit", ch))
+        i += 1
+    return out
+
+
+def _format_number(v: float, fmt: str) -> str:
+    section = (fmt or "").split(";")[0].strip()
+    if section in ("", "General", "Standard", "@"):
+        return _general(v)
+    toks = _tokens(section)
+    if toks is None or not any(t == "ph" for t, _ in toks):
+        return _general(v)
+    if any(t == "lit" and "%" in x for t, x in toks):
+        v = v * 100
+    dot = next((i for i, (t, _) in enumerate(toks) if t == "dot"), len(toks))
+    int_toks, dec_toks = toks[:dot], toks[dot + 1:]
+    decimals = sum(1 for t, _ in dec_toks if t == "ph")
+    neg = v < 0
+    text = f"{abs(v):.{decimals}f}"
+    int_digits, _, dec_digits = text.partition(".")
+    if int_digits == "0" and any(c == "#" for t, c in int_toks if t == "ph") and not any(c == "0" for t, c in int_toks if t == "ph"):
+        int_digits = ""
+    # partie entière : placeholders remplis de droite à gauche, chiffres en trop devant le premier
+    phs = [i for i, (t, _) in enumerate(int_toks) if t == "ph"]
+    parts = [x for _, x in int_toks]
+    digits = list(int_digits)
+    for idx in reversed(phs):
+        if digits:
+            parts[idx] = digits.pop()
+        else:
+            parts[idx] = "0" if int_toks[idx][1] == "0" else (" " if int_toks[idx][1] == "?" else "")
+    if digits and phs:
+        parts[phs[0]] = "".join(digits) + parts[phs[0]]
+    out = "".join(parts)
+    if dec_toks:
+        dparts, k = [], 0
+        for t, x in dec_toks:
+            if t == "ph":
+                dparts.append(dec_digits[k] if k < len(dec_digits) else "0")
+                k += 1
+            else:
+                dparts.append(x)
+        out += "," + "".join(dparts)
+    return ("-" if neg else "") + out
+
+
 def cell_text(cell) -> str:
-    """Texte tel qu'affiché dans Excel (nombres sans « .0 », zéros de tête du format, dates JJ/MM/AAAA)."""
+    """Texte tel qu'affiché dans Excel (formats numériques, zéros de tête, dates JJ/MM/AAAA).
+
+    Les séparateurs de milliers sont ignorés : un code doit rester une suite de chiffres.
+    """
     v = cell.value
     if v is None:
         return ""
@@ -30,14 +120,8 @@ def cell_text(cell) -> str:
         return "VRAI" if v else "FAUX"
     if isinstance(v, (datetime, date)):
         return v.strftime("%d/%m/%Y")
-    if isinstance(v, float) and v.is_integer():
-        v = int(v)
-    if isinstance(v, int):
-        s = str(v)
-        fmt = (cell.number_format or "").strip()
-        if re.fullmatch(r"0+", fmt):
-            s = s.zfill(len(fmt))
-        return s
+    if isinstance(v, (int, float)):
+        return _format_number(v, cell.number_format)
     return str(v).strip()
 
 
