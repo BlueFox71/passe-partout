@@ -99,8 +99,10 @@ select.input option { background: #1a0b2e; }
 }
 .logo img { width: 100%; height: 100%; object-fit: cover; }
 .logo.xl { width: 84px; height: 84px; border-radius: 22px; font-size: 36px; box-shadow: 0 0 30px rgba(255, 61, 154, .25); }
-.logo.img { background: #fff !important; }
-.logo.img img { object-fit: cover; }
+/* Image : fond transparent et coins arrondis portés par l'image elle-même, sinon un liseré
+   du fond apparaît sur les bords arrondis (visible sur les logos sombres). */
+.logo.img { background: transparent !important; }
+.logo.img img { object-fit: cover; border-radius: inherit; display: block; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px;
