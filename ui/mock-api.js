@@ -188,6 +188,12 @@
     async get_settings() { return clone(settings); },
     async save_settings(s) { settings = { ...settings, ...s }; return clone(settings); },
     async open_backups_folder() { return {}; },
+    async replace_images(accs, cards) {
+      let n = 0;
+      for (const [list, map] of [[accounts, accs || {}], [giftcards, cards || {}]])
+        for (const x of list) { const p = map[x.id]; if (p && x.image === p[0]) { x.image = p[1]; n++; } }
+      return n;
+    },
     async set_images(accs, cards) {
       let n = 0;
       for (const [list, map] of [[accounts, accs], [giftcards, cards]])

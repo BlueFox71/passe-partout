@@ -39,10 +39,16 @@
 
         <div class="card glass">
           <h3>🖼️ Logos</h3>
-          <p>Passe-Partout connaît plus de 3 800 marques. Les comptes et cartes sans image peuvent recevoir automatiquement le logo de leur marque.</p>
-          <button class="btn btn-ghost" id="logos" ${missing.count ? "" : "disabled"}>${missing.count
-            ? `Ajouter ${missing.count} logo${missing.count > 1 ? "s" : ""} manquant${missing.count > 1 ? "s" : ""}`
-            : "Aucun logo à ajouter"}</button>
+          <p>Passe-Partout connaît plus de 3 800 marques. Les comptes et cartes sans image peuvent recevoir automatiquement le logo de leur marque,
+            et les logos de la bibliothèque déjà posés peuvent être redessinés avec le dernier style. Les images choisies à la main ne sont jamais modifiées.</p>
+          <div class="row">
+            <button class="btn btn-ghost" id="logos" ${missing.count ? "" : "disabled"}>${missing.count
+              ? `Ajouter ${missing.count} logo${missing.count > 1 ? "s" : ""} manquant${missing.count > 1 ? "s" : ""}`
+              : "Aucun logo à ajouter"}</button>
+            <button class="btn btn-ghost" id="logos-up" ${missing.outdated ? "" : "disabled"}>${missing.outdated
+              ? `Mettre à jour ${missing.outdated} logo${missing.outdated > 1 ? "s" : ""}`
+              : "Logos à jour"}</button>
+          </div>
         </div>
 
         <div class="card glass">
@@ -78,6 +84,11 @@
     });
     $("#imp").addEventListener("click", importExcel);
     $("#bkdir").addEventListener("click", (e) => { e.preventDefault(); PP.call("open_backups_folder"); });
+    $("#logos-up").addEventListener("click", async () => {
+      const n = await updateOldLogos();
+      PP.toast(`${n} logo${n > 1 ? "s" : ""} mis à jour`);
+      await PP.views.main.afterChange();
+    });
     $("#logos").addEventListener("click", async () => {
       const n = await applyMissingLogos();
       PP.toast(`${n} logo${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}`);
@@ -153,8 +164,27 @@
   async function missingLogos() {
     const [accs, cards] = await Promise.all([PP.call("list_accounts", null), PP.call("list_giftcards", null)]);
     const pick = (list) => list.filter((x) => !x.image).map((x) => [x.id, PP.logos.find(x.name)]).filter((x) => x[1]);
+    // logos de la bibliothèque dessinés avec l'ancien style (image identique au rendu version 1)
+    const old = async (list) => {
+      const out = [];
+      for (const x of list) {
+        const e = x.image && PP.logos.find(x.name);
+        if (!e || x.image === PP.logos.render(e)) continue;
+        if (x.image === PP.logos.render(e, 1) || await PP.logos.similar(x.image, PP.logos.render(e, 1)))
+          out.push([x.id, [x.image, PP.logos.render(e)]]);
+      }
+      return out;
+    };
     const a = pick(accs), g = pick(cards);
-    return { accounts: a, giftcards: g, count: a.length + g.length };
+    const [oa, og] = await Promise.all([old(accs), old(cards)]);
+    return { accounts: a, giftcards: g, count: a.length + g.length,
+      oldAccounts: oa, oldGiftcards: og, outdated: oa.length + og.length };
+  }
+
+  async function updateOldLogos() {
+    const m = await missingLogos();
+    if (!m.outdated) return 0;
+    return PP.call("replace_images", Object.fromEntries(m.oldAccounts), Object.fromEntries(m.oldGiftcards));
   }
 
   async function applyMissingLogos() {

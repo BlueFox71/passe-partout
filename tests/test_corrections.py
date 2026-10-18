@@ -237,3 +237,18 @@ def test_vue_liste_ou_grille_enregistree(tmp_path):
     assert api.save_settings({"view": "grid"})["view"] == "grid"
     assert make_api(tmp_path).get_settings()["view"] == "grid"
     assert api.save_settings({"view": "n'importe quoi"})["view"] == "grid"
+
+
+# remplacement des anciens logos : seulement si l'image actuelle est exactement l'ancien rendu
+def test_replace_images_seulement_si_inchangee(tmp_path):
+    VaultStore(tmp_path / "vault.json").save(sample_vault())
+    api = make_api(tmp_path)
+    a, b = api.list_accounts(None)
+    api.save_account({**a, "image": "data:image/png;base64,ANCIEN"})
+    api.save_account({**b, "image": "data:image/png;base64,PERSO"})
+    n = api.replace_images({
+        a["id"]: ["data:image/png;base64,ANCIEN", "data:image/png;base64,NOUVEAU"],
+        b["id"]: ["data:image/png;base64,ANCIEN", "data:image/png;base64,NOUVEAU"],
+    })
+    imgs = {x["id"]: x["image"] for x in api.list_accounts(None)}
+    assert n == 1 and imgs[a["id"]].endswith("NOUVEAU") and imgs[b["id"]].endswith("PERSO")

@@ -511,6 +511,25 @@ class Api:
             self._save()
         return n
 
+    @_locked
+    def replace_images(self, accounts: dict, giftcards: dict | None = None) -> int:
+        """Remplace des logos ({id: [ancien, nouveau]}) seulement si l'image actuelle est exactement l'ancienne.
+
+        Sert à mettre à jour les logos de la bibliothèque sans jamais toucher une image choisie à la main.
+        """
+        v = self._vault()
+        n = 0
+        for items, wanted in ((v.accounts, accounts or {}), (v.giftcards, giftcards or {})):
+            for item in items:
+                pair = wanted.get(item.id)
+                if (pair and len(pair) == 2 and item.image and item.image == pair[0]
+                        and str(pair[1]).startswith("data:image/png;base64,")):
+                    item.image = pair[1]
+                    n += 1
+        if n:
+            self._save()
+        return n
+
     # ---------------------------------------------------------------- fenêtre, dossiers
     @_locked
     def save_window(self, geom: dict) -> None:

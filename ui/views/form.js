@@ -11,12 +11,15 @@
           ${PP.logo({ name: nameFn() || "?", image: get() }, "")}
           <div class="txt"><b style="color:var(--text)">Image</b><br>Colle une image avec <b>Ctrl+V</b>, glisse un fichier ici, ou choisis un fichier.</div>
           <button type="button" class="btn btn-ghost" id="imgpick">${PP.icon.image} Fichier…</button>
-          ${get() ? `<button type="button" class="icon-btn" id="imgdel" title="Retirer l'image">${PP.icon.trash}</button>` : ""}
+          ${get() ? `<button type="button" class="btn btn-ghost" id="imgwhite" title="Poser l'image sur un fond blanc">⬜ Fond blanc</button>
+            <button type="button" class="icon-btn" id="imgdel" title="Retirer l'image">${PP.icon.trash}</button>` : ""}
         </div>`;
       container.querySelector("#imgpick").addEventListener("click", async () => {
         const img = await PP.call("pick_image");
         if (img) { set(img); draw(); }
       });
+      const white = container.querySelector("#imgwhite");
+      if (white) white.addEventListener("click", async () => { set(await V.onWhite(get())); draw(); });
       const del = container.querySelector("#imgdel");
       if (del) del.addEventListener("click", () => { set(null); draw(); });
       const drop = container.querySelector("#drop");
@@ -53,6 +56,26 @@
     draw();
     return { redraw: draw };
   };
+
+  // Pose une image (data URL) sur un fond blanc carré, avec une petite marge : utile pour les logos
+  // transparents ou sombres, invisibles sur le fond de l'appli.
+  V.onWhite = (src) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const size = 256, pad = 20;
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      const g = c.getContext("2d");
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, size, size);
+      const k = Math.min((size - 2 * pad) / img.width, (size - 2 * pad) / img.height);
+      const w = img.width * k, h = img.height * k;
+      g.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+      resolve(c.toDataURL("image/png"));
+    };
+    img.onerror = () => reject(new Error("Image illisible"));
+    img.src = src;
+  });
 
   /* Suggestions de noms connus sous un champ « nom ». `onLogo(entry)` est appelé quand un nom connu
      est choisi dans la liste ou tapé en entier. */

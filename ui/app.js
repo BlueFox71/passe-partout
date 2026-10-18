@@ -24,6 +24,14 @@
         if (!index.has(k)) index.set(k, e);
       }
     };
+    // Couleurs officielles quand celles de Simple Icons ne rendent pas la marque reconnaissable.
+    const BRAND_COLORS = {
+      "McDonald's": { bg: "DA291C", ink: "FFC72C" },
+      "Burger King": { bg: "D62300", ink: "F5EBDC" },
+      "IKEA": { bg: "0058A3", ink: "FFDA1A" },
+      "E.Leclerc": { bg: "0066B3", ink: "FFFFFF" },
+      "La Poste": { bg: "FFC800", ink: "003DA5" },
+    };
     const luminance = (hex) => {
       const n = parseInt(hex, 16);
       const ch = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
@@ -53,9 +61,36 @@
         return out.slice(0, limit).map((x) => x[1]);
       },
       // Rend le logo en PNG carré 256 px (data URL) : glyphe sur la couleur de la marque.
-      render(e) {
-        if (cache.has(e[0])) return cache.get(e[0]);
-        const [, hex, path, , , letters] = e;
+      // Deux images se ressemblent-elles (écart moyen faible en 48×48) ? Tolère les petites
+      // différences de rendu entre versions du moteur.
+      async similar(a, b) {
+        const pixels = (src) => new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const c = document.createElement("canvas");
+            c.width = c.height = 48;
+            const g = c.getContext("2d");
+            g.drawImage(img, 0, 0, 48, 48);
+            resolve(g.getImageData(0, 0, 48, 48).data);
+          };
+          img.onerror = () => resolve(null);
+          img.src = src;
+        });
+        const [pa, pb] = await Promise.all([pixels(a), pixels(b)]);
+        if (!pa || !pb) return false;
+        let diff = 0;
+        for (let i = 0; i < pa.length; i++) diff += Math.abs(pa[i] - pb[i]);
+        return diff / pa.length < 6;
+      },
+      // Rend le logo en PNG carré 256 px (data URL).
+      // Version 2 : dessin blanc (cerné de sombre si le fond est clair), couleurs officielles pour
+      // quelques marques. La version 1 (dessin noir sur fond clair) sert à reconnaître les anciens logos.
+      render(e, version = 2) {
+        const key = version + "|" + e[0];
+        if (cache.has(key)) return cache.get(key);
+        const [, hex0, path, , , letters] = e;
+        const brand = version >= 2 ? BRAND_COLORS[e[0]] : null;
+        const hex = brand ? brand.bg : hex0;
         const c = document.createElement("canvas");
         c.width = c.height = 256;
         const g = c.getContext("2d");
@@ -65,22 +100,33 @@
         grad.addColorStop(1, PP.shade(base));
         g.fillStyle = path ? base : grad;
         g.fillRect(0, 0, 256, 256);
-        const ink = luminance(hex) > 0.6 ? "#16101f" : "#ffffff";
+        const light = luminance(hex) > 0.6;
+        const n = parseInt(hex, 16);
+        const nearWhite = (n >> 16) >= 225 && ((n >> 8) & 255) >= 225 && (n & 255) >= 225;
+        let ink, outline = null;
+        if (version < 2) ink = light ? "#16101f" : "#ffffff";
+        else if (brand) ink = "#" + brand.ink;
+        else if (light && nearWhite) ink = "#16101f";          // fond quasi blanc : dessin sombre
+        else { ink = "#ffffff"; if (light) outline = "#16101f"; } // fond clair coloré : blanc cerné
         g.fillStyle = ink;
+        g.lineJoin = "round";
         if (path) {
           g.translate(52, 52);
           g.scale(152 / 24, 152 / 24);
-          g.fill(new Path2D(path));
+          const p2 = new Path2D(path);
+          if (outline) { g.strokeStyle = outline; g.lineWidth = 1.1; g.stroke(p2); }
+          g.fill(p2);
         } else {
           const t = letters || PP.initial(e[0]);
           const size = [0, 140, 112, 92, 74, 62, 54][Math.min(t.length, 6)];
           g.font = `800 ${size}px "Segoe UI", system-ui, sans-serif`;
           g.textAlign = "center";
           g.textBaseline = "middle";
+          if (outline) { g.strokeStyle = outline; g.lineWidth = 10; g.strokeText(t, 128, 136); }
           g.fillText(t, 128, 136);
         }
         const url = c.toDataURL("image/png");
-        cache.set(e[0], url);
+        cache.set(key, url);
         return url;
       },
     };
