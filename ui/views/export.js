@@ -30,7 +30,7 @@
     });
     m.querySelector("#x-no").addEventListener("click", () => PP.modal.close());
     m.querySelector("#x-go").addEventListener("click", async () => {
-      const r = await PP.call("export", kind, accounts.map((a) => a.id), withCards);
+      const r = await PP.call("export", kind, accounts.map((a) => a.id), withCards ? giftcards.map((g) => g.id) : []);
       if (!r) return; // dossier non choisi
       PP.modal.close();
       PP.toast(`${r.files.length} fichier${r.files.length > 1 ? "s" : ""} exporté${r.files.length > 1 ? "s" : ""}`, { seconds: 4 });

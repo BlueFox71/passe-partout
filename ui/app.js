@@ -181,12 +181,22 @@
     }
   };
 
+  // Sous pywebview, l'API arrive avec l'événement « pywebviewready ». La maquette n'est utilisée
+  // que si aucune trace de pywebview n'apparaît (interface ouverte dans un navigateur).
   function waitForApi() {
     return new Promise((resolve) => {
       if (window.pywebview && window.pywebview.api) return resolve(window.pywebview.api);
       let settled = false;
-      window.addEventListener("pywebviewready", () => { if (!settled) { settled = true; resolve(window.pywebview.api); } });
-      setTimeout(() => { if (!settled) { settled = true; resolve(window.MockApi); } }, 300);
+      const done = (api) => { if (!settled) { settled = true; resolve(api); } };
+      window.addEventListener("pywebviewready", () => done(window.pywebview.api));
+      const check = () => {
+        if (settled) return;
+        if (window.pywebview) return setTimeout(check, 200); // pywebview présent mais pas encore prêt
+        done(window.MockApi);
+        document.body.insertAdjacentHTML("beforeend",
+          '<div style="position:fixed;right:10px;bottom:10px;z-index:99;padding:4px 10px;border-radius:8px;background:#ffc23d;color:#1a0b2e;font-weight:700;font-size:12px">MAQUETTE — données fictives</div>');
+      };
+      setTimeout(check, 600);
     });
   }
 

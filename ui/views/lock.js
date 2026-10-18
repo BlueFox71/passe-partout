@@ -24,9 +24,11 @@
           <div class="err" id="err"></div>
           ${s.mock ? `<div class="hint">Maquette : le code est 123456</div>` : ""}
         </div>
+        <a href="#" id="restore-link" class="hint" style="color:var(--faint)">Problème d'accès ? Restaurer une sauvegarde</a>
       </div>`);
 
     const err = app.querySelector("#err");
+    app.querySelector("#restore-link").addEventListener("click", (e) => { e.preventDefault(); V.showCorrupt(true); });
     const card = app.querySelector(".lock-card");
 
     const submit = async (value) => {
@@ -86,21 +88,24 @@
     }
   };
 
-  V.showCorrupt = async () => {
+  V.showCorrupt = async (fromLock = false) => {
     const backups = await PP.call("list_backups");
     const app = PP.render(`
       <div class="screen-center">
         ${PP.brand("big-brand")}
         <div class="glass" style="width:480px;padding:26px">
-          <h2 style="margin:0 0 8px">Le fichier de données est illisible</h2>
-          <p style="color:var(--muted);margin:0 0 16px">Il a peut-être été abîmé ou modifié. Tu peux restaurer une sauvegarde automatique :
-            la plus récente est en haut.</p>
+          <h2 style="margin:0 0 8px">${fromLock ? "Restaurer une sauvegarde" : "Le fichier de données est illisible"}</h2>
+          <p style="color:var(--muted);margin:0 0 16px">${fromLock ? "Si ton code ne fonctionne plus parce que le fichier a été abîmé" : "Il a peut-être été abîmé ou modifié. Tu peux restaurer"}
+            une sauvegarde automatique : la plus récente est en haut. Il faudra ensuite saisir le code de cette sauvegarde.</p>
           ${backups.length
             ? backups.map((b) => `<div class="prof-row"><div style="flex:1">${PP.esc(b.date)}</div>
                 <button class="btn btn-ghost" data-b="${PP.esc(b.name)}">Restaurer</button></div>`).join("")
             : `<div class="warn-box">Aucune sauvegarde disponible.</div>`}
+          ${fromLock ? `<div style="margin-top:16px"><button class="btn btn-ghost" id="back">Retour</button></div>` : ""}
         </div>
       </div>`);
+    const back = app.querySelector("#back");
+    if (back) back.addEventListener("click", () => V.show());
     app.querySelectorAll("[data-b]").forEach((b) =>
       b.addEventListener("click", async () => {
         if (!(await PP.confirm("Restaurer cette sauvegarde ?", "Les modifications faites après cette date seront perdues.", { ok: "Restaurer" }))) return;

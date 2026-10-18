@@ -61,6 +61,30 @@ class VaultStore:
             raise VaultCorrupt("Contenu illisible") from e
         return self.vault
 
+    def reload(self) -> Vault:
+        """Relit le fichier avec la clé déjà en mémoire (après une restauration).
+
+        Lève CryptoError si le fichier est chiffré avec une autre clé, VaultCorrupt s'il est illisible.
+        """
+        blob = self.path.read_bytes()
+        if crypto.is_encrypted(blob):
+            try:
+                n, salt = crypto.header(blob)
+            except CryptoError as e:
+                raise VaultCorrupt(str(e)) from e
+            if self._key is None or salt != self._salt or n != self._n:
+                raise CryptoError("Code requis")
+            data = crypto.decrypt_with_key(blob, self._key)
+        else:
+            data = blob
+            self._key = self._salt = self._n = None
+            self._encrypted = False
+        try:
+            self.vault = Vault.from_dict(json.loads(data.decode("utf-8")))
+        except (ValueError, UnicodeDecodeError, TypeError, AttributeError) as e:
+            raise VaultCorrupt("Contenu illisible") from e
+        return self.vault
+
     # ---------- écriture ----------
     def _encode(self, vault: Vault) -> bytes:
         data = json.dumps(vault.to_dict(), ensure_ascii=False, indent=1).encode("utf-8")

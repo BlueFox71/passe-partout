@@ -130,3 +130,28 @@ def test_forget_key(tmp_path):
     s.forget_key()
     with pytest.raises(PermissionError):
         s.save(sample_vault())
+
+
+def test_reload_avec_cle_en_memoire(tmp_path):
+    s = VaultStore(tmp_path / "vault.json")
+    s.save(sample_vault())
+    s.set_lock("c")
+    v = s.vault
+    v.accounts = []
+    s.save(v)
+    s.restore(s.list_backups()[0])
+    assert len(s.reload().accounts) == 2
+
+
+def test_reload_autre_cle_refuse(tmp_path):
+    s = VaultStore(tmp_path / "vault.json")
+    s.save(sample_vault())
+    s.set_lock("c")
+    s.save(sample_vault())
+    s.set_lock("d")  # les sauvegardes sont re-chiffrées : on simule une sauvegarde d'un autre code
+    other = VaultStore(tmp_path / "autre" / "vault.json")
+    other.save(sample_vault())
+    other.set_lock("zzz")
+    (tmp_path / "vault.json").write_bytes((tmp_path / "autre" / "vault.json").read_bytes())
+    with pytest.raises(CryptoError):
+        s.reload()
