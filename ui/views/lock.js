@@ -3,9 +3,19 @@
   const V = (PP.views.lock = {});
   let code = "";
   let waitTimer = null;
+  let press = null; // pavé PIN affiché actuellement (null sinon)
+
+  // Un seul écouteur clavier pour toute la session : réafficher l'écran ne doit pas doubler les touches.
+  window.addEventListener("keydown", (e) => {
+    if (!press || !document.getElementById("dots")) return;
+    if (/^[0-9]$/.test(e.key)) press(e.key);
+    else if (e.key === "Backspace") press("del");
+    else if (e.key === "Enter") { e.preventDefault(); press("ok"); }
+  });
 
   V.show = async () => {
     code = "";
+    press = null;
     const s = PP.state;
     if (s.corrupt) return V.showCorrupt();
     const isPin = s.lock_mode === "pin";
@@ -32,10 +42,13 @@
     app.querySelector("#restore-link").addEventListener("click", (e) => { e.preventDefault(); V.showCorrupt(true); });
     const card = app.querySelector(".lock-card");
 
+    let busy = false;
     const submit = async (value) => {
-      if (!value) return;
-      const r = await PP.call("unlock", value);
-      if (r.ok) { PP.state.locked = false; return PP.route(); }
+      if (!value || busy) return;
+      busy = true;
+      let r;
+      try { r = await PP.call("unlock", value); } finally { busy = false; }
+      if (r.ok) { PP.state.locked = false; press = null; return PP.route(); }
       code = "";
       drawDots();
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
@@ -68,22 +81,20 @@
 
     if (isPin) {
       drawDots();
-      const press = (k) => {
+      press = (k) => {
+        if (busy) return;
         if (k === "del") code = code.slice(0, -1);
         else if (k === "ok") return submit(code);
         else if (code.length < (pinLength || 12)) code += k;
         drawDots();
         if (pinLength && code.length === pinLength) submit(code);
       };
-      app.querySelectorAll("[data-k]").forEach((b) => b.addEventListener("click", () => press(b.dataset.k)));
-      V._key = (e) => {
-        if (!document.getElementById("dots")) return window.removeEventListener("keydown", V._key);
-        if (/^[0-9]$/.test(e.key)) press(e.key);
-        else if (e.key === "Backspace") press("del");
-        else if (e.key === "Enter") press("ok");
-      };
-      window.removeEventListener("keydown", V._key);
-      window.addEventListener("keydown", V._key);
+      app.querySelectorAll("[data-k]").forEach((b) => {
+        b.tabIndex = -1;
+        // pas de focus sur le bouton : sinon Entrée « recliquerait » le dernier chiffre
+        b.addEventListener("mousedown", (e) => e.preventDefault());
+        b.addEventListener("click", () => press(b.dataset.k));
+      });
     } else {
       const pw = app.querySelector("#pw");
       pw.focus();
@@ -93,6 +104,7 @@
   };
 
   V.showCorrupt = async (fromLock = false) => {
+    press = null;
     const backups = await PP.call("list_backups");
     const app = PP.render(`
       <div class="screen-center">
