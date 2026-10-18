@@ -408,6 +408,22 @@ class Api:
         self._save()
         return {}
 
+    def preview_import(self, path: str | None) -> dict | None:
+        """Simule un import sur une copie du coffre : renvoie {path, added, skipped} sans rien modifier."""
+        with self._mutex:
+            self._vault()
+        path = path or self._ask_file("excel")
+        if not path:
+            return None
+        with self._mutex:
+            copy = Vault.from_dict(self._vault().to_dict())
+            pid = copy.profiles[0].id if copy.profiles else "?"
+            try:
+                added, skipped = import_xlsx(Path(path), copy, pid)
+            except Exception as e:
+                raise ValueError("Impossible de lire ce fichier Excel") from e
+            return {"path": str(path), "added": added, "skipped": skipped}
+
     def import_excel(self, path: str | None, profile_name: str) -> dict | None:
         path = path or self._ask_file("excel")
         if not path:

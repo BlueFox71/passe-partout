@@ -330,3 +330,18 @@ def test_dialogue_ne_bloque_pas_l_api(tmp_path, fake_clip, clock, call):
      "import_excel": lambda: api.import_excel(None, "Jules"),
      "export": lambda: api.export("txt", [], [])}[call]()
     assert dlg.other_thread_ok is True
+
+
+def test_apercu_reimport_sans_modifier(api_unlocked, dialogs, tmp_path):
+    dialogs.file = str(make_xlsx(tmp_path / "mdps.xlsx"))
+    avant = (tmp_path / "vault.json").read_bytes()
+    n = len(api_unlocked.list_accounts(None))
+    r = api_unlocked.preview_import(None)
+    assert r["path"] == dialogs.file and r["added"] > 0 and r["skipped"] == 0
+    assert len(api_unlocked.list_accounts(None)) == n
+    assert (tmp_path / "vault.json").read_bytes() == avant
+    assert api_unlocked.import_excel(r["path"], "Jules")["added"] == r["added"]
+
+
+def test_apercu_annule(api_unlocked):
+    assert api_unlocked.preview_import(None) is None

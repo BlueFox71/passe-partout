@@ -186,6 +186,7 @@
     async set_lock(mode, code) { lock = { mode, code }; return {}; },
     async get_settings() { return clone(settings); },
     async save_settings(s) { settings = { ...settings, ...s }; return clone(settings); },
+    async preview_import() { return { path: "C:\maquette\mdps.xlsx", added: 12, skipped: 118 }; },
     async import_excel(path, profileName) {
       if (!hasData) { hasData = true; profiles.splice(1); profiles[0].name = profileName || "Moi"; }
       return { added: 130, skipped: 0 };

@@ -135,9 +135,15 @@
 
   async function importExcel() {
     const cur = S.profiles.find((p) => p.id === S.profileId) || S.profiles[0];
-    const r = await PP.call("import_excel", null, cur.name);
-    if (!r) return;
-    PP.toast(`${r.added} compte(s) ajouté(s), ${r.skipped} déjà présent(s)`, { seconds: 5 });
+    const pre = await PP.call("preview_import", null);
+    if (!pre) return; // sélection annulée
+    if (!pre.added) { PP.toast(`Rien à ajouter : ${pre.skipped} élément(s) déjà présent(s)`, { seconds: 5 }); return; }
+    const ok = await PP.confirm("Importer ce fichier ?",
+      `${pre.added} élément(s) seront ajoutés au profil « ${cur.name} », ${pre.skipped} ignoré(s) car déjà présents. Aucun compte existant ne sera modifié.`,
+      { ok: `Ajouter ${pre.added} élément(s)` });
+    if (!ok) return;
+    const r = await PP.call("import_excel", pre.path, cur.name);
+    PP.toast(`${r.added} élément(s) ajouté(s), ${r.skipped} déjà présent(s)`, { seconds: 5 });
     await PP.views.main.afterChange();
   }
 })();
