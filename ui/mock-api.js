@@ -91,6 +91,7 @@
       return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true };
     },
     async unlock(code) {
+      await new Promise((r) => setTimeout(r, 400)); // comme la vraie dérivation de clé
       const wait = Math.ceil((waitUntil - Date.now()) / 1000);
       if (wait > 0) return { ok: false, wait_seconds: wait, error: "bad_code" };
       if (code === lock.code) { locked = false; fails = 0; return { ok: true, wait_seconds: 0 }; }

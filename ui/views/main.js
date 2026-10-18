@@ -328,7 +328,13 @@
     const m = PP.modal.open(`<div class="detail in-modal"></div>
       <div class="modal-foot"><button class="btn btn-ghost" id="dm-close">Fermer</button></div>`, { cls: "wide" });
     m.querySelector("#dm-close").addEventListener("click", () => PP.modal.close());
-    fillDetail(m.querySelector(".detail"), a, () => openDetail(accounts.find((x) => x.id === a.id)));
+    const box = m.querySelector(".detail");
+    // redessine seulement le contenu de la fenêtre (sans la fermer / rouvrir)
+    const redraw = () => {
+      const fresh = accounts.find((x) => x.id === a.id);
+      if (fresh && document.body.contains(box)) fillDetail(box, fresh, redraw);
+    };
+    fillDetail(box, a, redraw);
   }
 
   function renderDetail() {

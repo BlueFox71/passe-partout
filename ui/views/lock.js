@@ -23,6 +23,7 @@
       <div class="screen-center">
         ${PP.brand("big-brand")}
         <div class="lock-card glass">
+          <div class="lock-ok">${PP.icon.check}</div>
           <div style="color:var(--muted)">${isPin ? "Entre ton code PIN" : s.lock_mode === "unknown" ? "Entre ton code PIN ou ton mot de passe" : "Entre ton mot de passe"}</div>
           ${isPin
             ? `<div class="pin-dots" id="dots"></div>
@@ -46,9 +47,16 @@
     const submit = async (value) => {
       if (!value || busy) return;
       busy = true;
+      card.classList.add("checking"); // points animés pendant la vérification
       let r;
-      try { r = await PP.call("unlock", value); } finally { busy = false; }
-      if (r.ok) { PP.state.locked = false; press = null; return PP.route(); }
+      try { r = await PP.call("unlock", value); } finally { busy = false; card.classList.remove("checking"); }
+      if (r.ok) {
+        PP.state.locked = false;
+        press = null;
+        card.classList.add("unlocked"); // coche verte, puis ouverture du coffre
+        await new Promise((res) => setTimeout(res, 380));
+        return PP.route();
+      }
       code = "";
       drawDots();
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");

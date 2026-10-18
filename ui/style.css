@@ -373,3 +373,21 @@ select.input option { background: #1a0b2e; }
 .logo.lg { width: 64px; height: 64px; border-radius: 17px; font-size: 26px; }
 .modal.wide { width: 760px; }
 .detail.in-modal { padding: 4px 0 0; overflow: visible; }
+
+/* ---------- vérification du code ---------- */
+.lock-card { position: relative; }
+.lock-card.checking .pin-dots i.f { animation: dotwave .8s ease-in-out infinite; }
+.lock-card.checking .pin-dots i:nth-child(2) { animation-delay: .1s; }
+.lock-card.checking .pin-dots i:nth-child(3) { animation-delay: .2s; }
+.lock-card.checking .pin-dots i:nth-child(4) { animation-delay: .3s; }
+.lock-card.checking .pin-dots i:nth-child(5) { animation-delay: .4s; }
+.lock-card.checking .pin-dots i:nth-child(6) { animation-delay: .5s; }
+@keyframes dotwave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); box-shadow: 0 0 14px var(--cyan); background: var(--cyan); border-color: var(--cyan); } }
+.lock-card.checking .pin-pad { opacity: .55; pointer-events: none; transition: opacity .2s; }
+.lock-ok {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: inherit;
+  background: rgba(11, 7, 22, .78); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 2;
+}
+.lock-ok svg { width: 96px; height: 96px; color: var(--ok); stroke-width: 3; filter: drop-shadow(0 0 18px var(--ok)); transform: scale(.4); transition: transform .3s cubic-bezier(.3, 1.6, .5, 1); }
+.lock-card.unlocked .lock-ok { opacity: 1; }
+.lock-card.unlocked .lock-ok svg { transform: scale(1); }
