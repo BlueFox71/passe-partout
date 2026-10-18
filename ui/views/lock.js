@@ -61,7 +61,8 @@
     const drawDots = () => {
       const d = app.querySelector("#dots");
       if (!d) return;
-      const n = pinLength || Math.max(6, code.length);
+      // longueur inconnue : seulement les chiffres tapés (pas de cases vides qui suggéreraient 6 chiffres)
+      const n = pinLength || code.length;
       d.innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < code.length ? "f" : ""}"></i>`).join("");
     };
 
