@@ -56,9 +56,10 @@ class WinClipboard:
         self._no_cloud = _user32.RegisterClipboardFormatW("CanUploadToCloudClipboard")
         self._no_monitor = _user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
 
-    def get(self) -> str:
+    def get(self) -> str | None:
+        """Texte du presse-papiers ; None s'il est momentanément inaccessible."""
         if not _open():
-            return ""
+            return None
         try:
             h = _user32.GetClipboardData(CF_UNICODETEXT)
             if not h:

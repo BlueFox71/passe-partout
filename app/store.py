@@ -144,15 +144,18 @@ class VaultStore:
 
     # ---------- verrou ----------
     def set_lock(self, code: str | None) -> None:
-        """Active, change ou retire le verrou ; re-chiffre le coffre et les sauvegardes lisibles."""
+        """Active, change ou retire le verrou ; re-chiffre le coffre puis les sauvegardes lisibles.
+
+        Le coffre est écrit en premier : si cette écriture échoue, rien n'a changé (ni clé, ni sauvegardes).
+        """
         if self.vault is None:
             raise PermissionError("Coffre verrouillé")
-        old_key = self._key
+        old = (self._key, self._salt, self._n, self._encrypted)
         readable = []
         for b in self.list_backups():
             try:
                 blob = b.read_bytes()
-                data = crypto.decrypt_with_key(blob, old_key) if crypto.is_encrypted(blob) else blob
+                data = crypto.decrypt_with_key(blob, old[0]) if crypto.is_encrypted(blob) else blob
                 readable.append((b, data))
             except (CryptoError, TypeError, ValueError):
                 pass  # sauvegarde d'un ancien code : laissée telle quelle
@@ -163,13 +166,17 @@ class VaultStore:
         else:
             self._key = self._salt = self._n = None
             self._encrypted = False
+        try:
+            # pas de sauvegarde ici : elle contiendrait l'ancien chiffrement, illisible avec le nouveau code
+            self.save(self.vault, backup=False)
+        except BaseException:
+            self._key, self._salt, self._n, self._encrypted = old
+            raise
         for b, data in readable:
             out = crypto.encrypt_with_key(data, self._key, self._salt, self._n) if self._encrypted else data
             tmp = b.with_name(b.name + ".tmp")
             tmp.write_bytes(out)
             os.replace(tmp, b)
-        # pas de sauvegarde ici : elle contiendrait l'ancien chiffrement, illisible avec le nouveau code
-        self.save(self.vault, backup=False)
 
     def forget_key(self) -> None:
         """Efface la clé et les données déchiffrées de la mémoire (verrouillage)."""

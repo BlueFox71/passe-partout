@@ -8,6 +8,9 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import asdict
@@ -25,6 +28,16 @@ from app.store import VaultCorrupt, VaultStore
 from app.textutil import normalize
 
 CLIPBOARD_SECONDS = 30
+COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _open_folder(path: str) -> None:
+    if sys.platform == "win32":
+        os.startfile(path)  # dossier local de l'appli
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 PALETTE = ["#ff3d9a", "#7c3aed", "#00b8d9", "#f97316", "#22c55e", "#e11d48", "#6366f1", "#14b8a6", "#eab308", "#a855f7"]
 
 
@@ -45,7 +58,7 @@ def _timer(seconds, fn):
 
 class Api:
     def __init__(self, store: VaultStore, clipboard, clock=time.monotonic, dialogs=None,
-                 schedule=_timer, today=date.today):
+                 schedule=_timer, today=date.today, wall_clock=time.time):
         self._store = store
         self._clip = clipboard
         self._clock = clock
@@ -53,10 +66,12 @@ class Api:
         self._schedule = schedule
         self._today = today
         self._mutex = threading.RLock()
-        self._lockout = Lockout(clock)
         self._pending = None  # (texte copié, échéance)
         self._config_path = store.path.parent / "config.json"
         self._config = self._read_config()
+        # le délai anti-essais survit à un redémarrage (horloge murale, état dans config.json)
+        self._lockout = Lockout(wall_clock)
+        self._lockout.restore(self._config.get("lockout") or {})
         self._corrupt = False
         if store.exists() and not store.is_encrypted():
             try:
@@ -73,7 +88,7 @@ class Api:
 
     def _write_config(self) -> None:
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._config_path.with_name("config.json.tmp")
+        tmp = self._config_path.with_name(f"config.json.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(self._config, indent=1), encoding="utf-8")
         os.replace(tmp, self._config_path)
 
@@ -81,7 +96,7 @@ class Api:
         if not self._store.is_encrypted():
             return "none"
         mode = self._config.get("lock_mode")
-        return mode if mode in ("pin", "password") else "password"
+        return mode if mode in ("pin", "password") else "unknown"  # config perdue : champ de saisie libre
 
     # ---------------------------------------------------------------- accès au coffre
     def _vault(self) -> Vault:
@@ -124,12 +139,21 @@ class Api:
             self._store.load(str(code))
         except CryptoError:
             self._lockout.fail()
+            self._persist_lockout()
             return {"ok": False, "wait_seconds": self._lockout.wait_seconds(), "error": "bad_code"}
         except VaultCorrupt:
             self._corrupt = True
             return {"ok": False, "wait_seconds": 0, "error": "corrupt"}
         self._lockout.success()
+        self._persist_lockout()
         return {"ok": True, "wait_seconds": 0}
+
+    def _persist_lockout(self) -> None:
+        self._config["lockout"] = self._lockout.to_dict()
+        try:
+            self._write_config()
+        except OSError:
+            pass
 
     @_locked
     def lock(self) -> dict:
@@ -206,10 +230,11 @@ class Api:
             raise ValueError("Le nom est obligatoire")
         profiles = self._check_profiles(data.get("profiles"))
         existing = next((a for a in v.accounts if a.id == data.get("id")), None)
+        category = self._category_label(str(data.get("category") or ""))
         acc = Account(
             id=existing.id if existing else new_id(),
             name=name,
-            category=str(data.get("category") or "").strip(),
+            category=category,
             login=str(data.get("login") or "").strip(),
             password=str(data.get("password") or ""),
             login_mask=(data.get("login_mask") or None),
@@ -227,6 +252,15 @@ class Api:
         self._save()
         return asdict(acc)
 
+    def _category_label(self, category: str) -> str:
+        """« banque » devient « Banque » si cette catégorie existe déjà (évite les doublons de casse/accents)."""
+        category = re.sub(r"\s+", " ", category).strip()
+        key = normalize(category)
+        for a in self._vault().accounts:
+            if a.category and normalize(a.category) == key:
+                return a.category
+        return category
+
     @_locked
     def delete_account(self, account_id: str) -> dict:
         v = self._vault()
@@ -241,7 +275,7 @@ class Api:
         valid = self._profile_ids()
         add = [p for p in changes.get("add_profiles") or [] if p in valid]
         remove = set(changes.get("remove_profiles") or [])
-        category = str(changes.get("category") or "").strip()
+        category = self._category_label(str(changes.get("category") or ""))
         for a in v.accounts:
             if a.id not in ids:
                 continue
@@ -328,7 +362,8 @@ class Api:
         existing = next((p for p in v.profiles if p.id == data.get("id")), None)
         prof = Profile(id=existing.id if existing else new_id(), name=name,
                        avatar=data.get("avatar") or None,
-                       color=data.get("color") or PALETTE[len(v.profiles) % len(PALETTE)])
+                       color=data.get("color") if COLOR_RE.match(str(data.get("color") or ""))
+                       else PALETTE[len(v.profiles) % len(PALETTE)])
         if existing:
             v.profiles[v.profiles.index(existing)] = prof
         else:
@@ -351,10 +386,17 @@ class Api:
         return {}
 
     # ---------------------------------------------------------------- presse-papiers
-    def _clear_pending_secret(self) -> None:
-        if self._pending and self._clip.get() == self._pending[0]:
+    def _clear_pending_secret(self) -> bool:
+        """Efface le secret copié s'il est encore dans le presse-papiers. Faux si celui-ci est occupé."""
+        if not self._pending:
+            return True
+        current = self._clip.get()
+        if current is None:
+            return False  # presse-papiers momentanément inaccessible : on garde la tâche
+        if current == self._pending[0]:
             self._clip.clear()
         self._pending = None
+        return True
 
     @_locked
     def copy_secret(self, text: str) -> dict:
@@ -372,7 +414,8 @@ class Api:
     def tick(self) -> None:
         """Efface le secret copié une fois le délai écoulé (si le presse-papiers le contient encore)."""
         if self._pending and self._clock() >= self._pending[1]:
-            self._clear_pending_secret()
+            if not self._clear_pending_secret():
+                self._schedule(1.0, self.tick)
 
     # ---------------------------------------------------------------- images
     # Les boîtes de dialogue s'ouvrent hors du verrou interne : sinon l'effacement du presse-papiers
@@ -430,15 +473,29 @@ class Api:
             return None
         with self._mutex:
             first_launch = not self._store.exists()
-            pid = self._ensure_vault(profile_name)
+            original = None if first_launch else self._vault()
+            # l'import travaille sur une copie : en cas d'échec, rien n'est modifié
+            self._store.vault = Vault() if first_launch else Vault.from_dict(original.to_dict())
             try:
-                added, skipped = import_xlsx(Path(path), self._vault(), pid)
+                pid = self._ensure_vault(profile_name)
+                added, skipped = import_xlsx(Path(path), self._store.vault, pid)
+                self._save()
             except Exception as e:
-                if first_launch:
-                    self._store.vault = None
+                self._store.vault = original
                 raise ValueError("Impossible de lire ce fichier Excel") from e
-            self._save()
             return {"added": added, "skipped": skipped}
+
+    # ---------------------------------------------------------------- fenêtre, dossiers
+    @_locked
+    def save_window(self, geom: dict) -> None:
+        self._config["window"] = {k: geom.get(k) for k in ("width", "height", "x", "y")}
+        self._write_config()
+
+    @_locked
+    def open_backups_folder(self) -> dict:
+        self._store.backup_dir.mkdir(parents=True, exist_ok=True)
+        _open_folder(str(self._store.backup_dir))
+        return {}
 
     # ---------------------------------------------------------------- export
     def export(self, kind: str, account_ids: list[str], giftcards) -> dict | None:

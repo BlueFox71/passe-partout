@@ -61,7 +61,7 @@ def dialogs():
 
 
 def make_api(tmp_path, clip, clock, dialogs):
-    return Api(VaultStore(tmp_path / "vault.json"), clip, clock=clock, dialogs=dialogs, schedule=lambda s, f: None)
+    return Api(VaultStore(tmp_path / "vault.json"), clip, clock=clock, wall_clock=clock, dialogs=dialogs, schedule=lambda s, f: None)
 
 
 @pytest.fixture

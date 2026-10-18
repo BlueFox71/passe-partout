@@ -26,6 +26,16 @@ def date_fr(iso: str | None) -> str:
     return "/".join(reversed(iso.split("-"))) if iso else ""
 
 
+def unique_path(path: Path) -> Path:
+    """Ajoute « (2) », « (3) »… si le fichier existe déjà : un export n'écrase jamais le précédent."""
+    if not path.exists():
+        return path
+    n = 2
+    while (candidate := path.with_name(f"{path.stem} ({n}){path.suffix}")).exists():
+        n += 1
+    return candidate
+
+
 def _by_category(accounts: list[Account]) -> list[tuple[str, list[Account]]]:
     groups: dict[str, list[Account]] = {}
     for a in accounts:
@@ -55,7 +65,7 @@ def export_text(accounts: list[Account], giftcards: list[GiftCard], out_dir: Pat
             if g.end_date:
                 lines.append(f"  Date de fin : {date_fr(g.end_date)}")
             lines.append("")
-    out = Path(out_dir) / f"mots-de-passe-{date.today().isoformat()}.txt"
+    out = unique_path(Path(out_dir) / f"mots-de-passe-{date.today().isoformat()}.txt")
     out.write_text("\n".join(lines), encoding="utf-8-sig")
     return out
 
@@ -224,7 +234,7 @@ def export_png(accounts: list[Account], giftcards: list[GiftCard], out_dir: Path
             sub = f"{len(cards)} élément{'s' if len(cards) > 1 else ''} · {today}"
             if len(chunks) > 1:
                 sub += f" · page {n}/{len(chunks)}"
-            path = out_dir / f"{_safe_name(title)}-{n}.png"
+            path = unique_path(out_dir / f"{_safe_name(title)}-{n}.png")
             _render_page(title, sub, chunk, path)
             files.append(path)
     return files

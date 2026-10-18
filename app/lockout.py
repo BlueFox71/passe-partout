@@ -23,3 +23,13 @@ class Lockout:
     def success(self) -> None:
         self._fails = 0
         self._until = 0.0
+
+    def to_dict(self) -> dict:
+        return {"fails": self._fails, "until": self._until}
+
+    def restore(self, d: dict) -> None:
+        try:
+            self._fails = max(0, int(d.get("fails", 0)))
+            self._until = float(d.get("until", 0.0))
+        except (TypeError, ValueError, AttributeError):
+            pass

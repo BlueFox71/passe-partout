@@ -97,11 +97,11 @@ def run(data_dir: Path | None = None) -> None:
 
     def on_closing():
         try:
-            api._config["window"] = {"width": window.width, "height": window.height, "x": window.x, "y": window.y}
-            api._write_config()
+            api.save_window({"width": window.width, "height": window.height, "x": window.x, "y": window.y})
         except Exception:
             pass
-        api._clear_pending_secret()  # ne laisse pas un mot de passe copié derrière soi
+        with api._mutex:
+            api._clear_pending_secret()  # ne laisse pas un mot de passe copié derrière soi
 
     window.events.closing += on_closing
     threading.Thread(target=watch_session, args=(api, window), daemon=True).start()

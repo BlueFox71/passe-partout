@@ -12,9 +12,13 @@ if TYPE_CHECKING:
     from app.model import Account
 
 
+_LIGATURES = str.maketrans({"œ": "oe", "Œ": "oe", "æ": "ae", "Æ": "ae", "ß": "ss"})
+
+
 def normalize(s: str | None) -> str:
-    """Minuscules, sans accents, espaces multiples réduits."""
-    s = unicodedata.normalize("NFD", s or "")
+    """Minuscules, sans accents ni ligatures (œ → oe), espaces multiples réduits."""
+    s = (s or "").translate(_LIGATURES)
+    s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", s).strip().lower()
 
