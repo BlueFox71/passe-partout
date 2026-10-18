@@ -375,9 +375,13 @@ class Api:
             self._clear_pending_secret()
 
     # ---------------------------------------------------------------- images
-    @_locked
+    # Les boîtes de dialogue s'ouvrent hors du verrou interne : sinon l'effacement du presse-papiers
+    # et le verrouillage (session Windows, inactivité) attendraient leur fermeture.
+    def _ask_file(self, kind: str) -> str | None:
+        return self._dialogs.open_file(kind) if self._dialogs else None
+
     def pick_image(self) -> str | None:
-        path = self._dialogs.open_file("image") if self._dialogs else None
+        path = self._ask_file("image")
         if not path:
             return None
         return _normalize_image(Path(path).read_bytes())
@@ -404,30 +408,34 @@ class Api:
         self._save()
         return {}
 
-    @_locked
     def import_excel(self, path: str | None, profile_name: str) -> dict | None:
-        if not path:
-            path = self._dialogs.open_file("excel") if self._dialogs else None
+        path = path or self._ask_file("excel")
         if not path:
             return None
-        first_launch = not self._store.exists()
-        pid = self._ensure_vault(profile_name)
-        try:
-            added, skipped = import_xlsx(Path(path), self._vault(), pid)
-        except Exception as e:
-            if first_launch:
-                self._store.vault = None
-            raise ValueError("Impossible de lire ce fichier Excel") from e
-        self._save()
-        return {"added": added, "skipped": skipped}
+        with self._mutex:
+            first_launch = not self._store.exists()
+            pid = self._ensure_vault(profile_name)
+            try:
+                added, skipped = import_xlsx(Path(path), self._vault(), pid)
+            except Exception as e:
+                if first_launch:
+                    self._store.vault = None
+                raise ValueError("Impossible de lire ce fichier Excel") from e
+            self._save()
+            return {"added": added, "skipped": skipped}
 
     # ---------------------------------------------------------------- export
-    @_locked
     def export(self, kind: str, account_ids: list[str], giftcards) -> dict | None:
-        v = self._vault()
+        with self._mutex:
+            self._vault()  # refuse tout de suite si le coffre est verrouillé
         folder = self._dialogs.pick_folder() if self._dialogs else None
         if not folder:
             return None
+        with self._mutex:
+            return self._export(kind, account_ids, giftcards, Path(folder))
+
+    def _export(self, kind, account_ids, giftcards, folder: Path) -> dict:
+        v = self._vault()
         wanted = set(account_ids or [])
         accounts = [a for a in v.accounts if a.id in wanted]
         if giftcards is True:
@@ -436,9 +444,9 @@ class Api:
             ids = set(giftcards or [])
             cards = [g for g in v.giftcards if g.id in ids]
         if kind == "txt":
-            files = [export_text(accounts, cards, Path(folder))]
+            files = [export_text(accounts, cards, folder)]
         elif kind == "png":
-            files = export_png(accounts, cards, Path(folder))
+            files = export_png(accounts, cards, folder)
         else:
             raise ValueError("Format d'export inconnu")
         return {"files": [str(f) for f in files]}

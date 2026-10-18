@@ -295,3 +295,38 @@ def test_export_annule(api_unlocked):
 def test_normalize_image_refuse_texte(api_unlocked):
     with pytest.raises(ValueError):
         api_unlocked.normalize_image("data:text/plain;base64,Ym9uam91cg==")
+
+
+class BlockingCheckDialogs(FakeDialogs):
+    """Pendant que la « boîte de dialogue » est ouverte, un autre thread appelle l'API."""
+
+    def __init__(self):
+        super().__init__()
+        self.api = None
+        self.other_thread_ok = None
+
+    def _probe(self):
+        import threading
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.api.get_state(), self.api.tick(), done.set()), daemon=True).start()
+        self.other_thread_ok = done.wait(1.0)
+
+    def open_file(self, kind):
+        self._probe()
+        return None
+
+    def pick_folder(self):
+        self._probe()
+        return None
+
+
+@pytest.mark.parametrize("call", ["pick_image", "import_excel", "export"])
+def test_dialogue_ne_bloque_pas_l_api(tmp_path, fake_clip, clock, call):
+    VaultStore(tmp_path / "vault.json").save(sample_vault())
+    dlg = BlockingCheckDialogs()
+    api = make_api(tmp_path, fake_clip, clock, dlg)
+    dlg.api = api
+    {"pick_image": lambda: api.pick_image(),
+     "import_excel": lambda: api.import_excel(None, "Jules"),
+     "export": lambda: api.export("txt", [], [])}[call]()
+    assert dlg.other_thread_ok is True
