@@ -169,3 +169,16 @@ def test_restaurations_repetees_gardent_la_derniere_version(tmp_path):
     noms = {VaultStore(b).load(None).accounts[0].name for b in fichiers}
     assert "version6" in noms  # la dernière version enregistrée n'a pas été perdue
     assert len(s.list_backups()) == 5
+
+
+@pytest.mark.parametrize("choix", [0, -1, 2])
+def test_restaurations_ne_perdent_aucune_version(tmp_path, choix):
+    s = VaultStore(tmp_path / "vault.json")
+    for i in range(6):  # 6 versions : 1 courante + 5 sauvegardes
+        v = sample_vault()
+        v.accounts[0].name = f"version{i}"
+        s.save(v)
+    for _ in range(6):
+        s.restore(s.list_backups()[choix])
+    fichiers = [*s.list_backups(), tmp_path / "vault.json"]
+    assert {VaultStore(b).load(None).accounts[0].name for b in fichiers} == {f"version{i}" for i in range(6)}
