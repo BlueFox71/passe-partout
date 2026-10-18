@@ -56,10 +56,11 @@
       waitTimer = setInterval(tick, 1000);
     };
 
+    const pinLength = Number(s.pin_length) || 0; // connue : validation automatique dès le dernier chiffre
     const drawDots = () => {
       const d = app.querySelector("#dots");
       if (!d) return;
-      const n = Math.max(6, code.length);
+      const n = pinLength || Math.max(6, code.length);
       d.innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < code.length ? "f" : ""}"></i>`).join("");
     };
 
@@ -68,8 +69,9 @@
       const press = (k) => {
         if (k === "del") code = code.slice(0, -1);
         else if (k === "ok") return submit(code);
-        else if (code.length < 12) code += k;
+        else if (code.length < (pinLength || 12)) code += k;
         drawDots();
+        if (pinLength && code.length === pinLength) submit(code);
       };
       app.querySelectorAll("[data-k]").forEach((b) => b.addEventListener("click", () => press(b.dataset.k)));
       V._key = (e) => {

@@ -199,3 +199,32 @@ def test_set_images_refuse_autre_chose_qu_une_image(tmp_path):
     api = make_api(tmp_path)
     a = api.list_accounts(None)[1]
     assert api.set_images({a["id"]: "javascript:alert(1)"}, {}) == 0
+
+
+# validation automatique du PIN : longueur connue
+def test_longueur_pin_retenue(tmp_path):
+    api = make_api(tmp_path)
+    api.start_empty("Jules")
+    api.set_lock("pin", "246810")
+    assert make_api(tmp_path).get_state()["pin_length"] == 6
+
+
+def test_longueur_pin_apprise_au_deverrouillage(tmp_path):
+    api = make_api(tmp_path)
+    api.start_empty("Jules")
+    api.set_lock("pin", "1357")
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    cfg.pop("pin_length")  # coffre créé avant la fonctionnalité
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    relance = make_api(tmp_path)
+    assert relance.get_state()["pin_length"] is None
+    assert relance.unlock("1357")["ok"] is True
+    assert make_api(tmp_path).get_state()["pin_length"] == 4
+
+
+def test_pas_de_longueur_pour_un_mot_de_passe(tmp_path):
+    api = make_api(tmp_path)
+    api.start_empty("Jules")
+    api.set_lock("pin", "1357")
+    api.set_lock("password", "motdepasse")
+    assert make_api(tmp_path).get_state()["pin_length"] is None

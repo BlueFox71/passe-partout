@@ -88,7 +88,7 @@
 
   window.MockApi = {
     async get_state() {
-      return { locked, lock_mode: lock.mode, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true };
+      return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true };
     },
     async unlock(code) {
       const wait = Math.ceil((waitUntil - Date.now()) / 1000);

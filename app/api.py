@@ -127,7 +127,9 @@ class Api:
         has_data = self._store.exists()
         locked = has_data and not self._corrupt and self._store.vault is None
         profiles = [asdict(p) for p in self._store.vault.profiles] if self._store.vault else []
-        return {"locked": locked, "lock_mode": self._lock_mode() if has_data else "none",
+        mode = self._lock_mode() if has_data else "none"
+        pin_length = self._config.get("pin_length") if mode == "pin" else None
+        return {"locked": locked, "lock_mode": mode, "pin_length": pin_length,
                 "has_data": has_data, "corrupt": self._corrupt, "profiles": profiles}
 
     @_locked
@@ -145,6 +147,9 @@ class Api:
             self._corrupt = True
             return {"ok": False, "wait_seconds": 0, "error": "corrupt"}
         self._lockout.success()
+        if self._lock_mode() == "pin" and str(code).isdigit():
+            # longueur du PIN, pour valider automatiquement la saisie au prochain déverrouillage
+            self._config["pin_length"] = len(str(code))
         self._persist_lockout()
         return {"ok": True, "wait_seconds": 0}
 
@@ -174,6 +179,10 @@ class Api:
             raise ValueError("Le mot de passe doit faire au moins 6 caractères")
         self._store.set_lock(code if mode != "none" else None)
         self._config["lock_mode"] = mode
+        if mode == "pin":
+            self._config["pin_length"] = len(code)
+        else:
+            self._config.pop("pin_length", None)
         self._write_config()
         return {}
 
