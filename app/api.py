@@ -195,6 +195,8 @@ class Api:
         v = self._vault()
         if "autolock_minutes" in changes:
             v.settings["autolock_minutes"] = max(0, int(changes["autolock_minutes"]))
+        if changes.get("view") in ("list", "grid"):
+            v.settings["view"] = changes["view"]
         self._save()
         return dict(v.settings)
 

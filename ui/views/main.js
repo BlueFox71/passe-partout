@@ -129,8 +129,47 @@
     const c = document.getElementById("content");
     if (S.view === "giftcards") return PP.views.giftcards.render(c, giftcards);
     if (S.view === "settings") return PP.views.settings.render(c);
-    c.innerHTML = `<div class="list"><div class="list-head"></div><div class="list-scroll" id="list"></div><div id="bulk"></div></div><div class="detail" id="detail"></div>`;
+    c.innerHTML = `<div class="list ${isGrid() ? "grid-mode" : ""}"><div class="list-head"></div>
+        <div class="list-body"><div class="list-scroll" id="list"></div><div class="az" id="az"></div></div>
+        <div id="bulk"></div></div>${isGrid() ? "" : `<div class="detail" id="detail"></div>`}`;
     renderList();
+  }
+
+  const isGrid = () => (S.settings && S.settings.view) === "grid";
+
+  async function setView(view) {
+    S.settings = await PP.call("save_settings", { view });
+    renderContent();
+  }
+
+  // Première lettre (sans accent) d'un nom ; « # » pour les chiffres et symboles.
+  const letterOf = (name) => {
+    const c = PP.normalize(name).charAt(0).toUpperCase();
+    return c >= "A" && c <= "Z" ? c : "#";
+  };
+
+  function renderAz(vis) {
+    const az = document.getElementById("az");
+    if (!az) return;
+    const present = new Set(vis.map((a) => letterOf(a.name)));
+    az.innerHTML = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#"].map((l) =>
+      `<b class="${present.has(l) ? "" : "off"}" data-l="${l}">${l}</b>`).join("");
+    az.querySelectorAll("b:not(.off)").forEach((b) => b.addEventListener("click", () => jumpTo(b.dataset.l)));
+  }
+
+  // Va au premier compte de la lettre (dans la partie alphabétique, après les favoris si besoin).
+  function jumpTo(letter) {
+    const vis = V.visible();
+    const matches = vis.filter((a) => letterOf(a.name) === letter);
+    if (!matches.length) return;
+    const grouped = S.filter === "all" && !S.query;
+    const target = (grouped && matches.find((a) => !a.favorite)) || matches[0];
+    if (!isGrid() && !selecting) { S.selectedId = target.id; revealed = false; renderList(); }
+    const el = document.querySelector(`#list [data-id="${CSS.escape(target.id)}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+      el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+    }
   }
 
   function title() {
@@ -147,32 +186,49 @@
     if (!S.selectedId && vis.length && !selecting) S.selectedId = vis[0].id;
     document.querySelector(".list-head").innerHTML = `
       <div><h2>${PP.esc(title())}</h2><small>${vis.length} compte${vis.length > 1 ? "s" : ""}</small></div>
-      <button class="icon-btn ${selecting ? "on" : ""}" id="sel" title="Sélection multiple">${PP.icon.select}</button>`;
+      <div class="row" style="gap:6px">
+        <div class="seg view-seg"><button data-view="list" class="${isGrid() ? "" : "on"}" title="Vue liste">${PP.icon.list}</button><button data-view="grid" class="${isGrid() ? "on" : ""}" title="Vue grille">${PP.icon.grid}</button></div>
+        <button class="icon-btn ${selecting ? "on" : ""}" id="sel" title="Sélection multiple">${PP.icon.select}</button>
+      </div>`;
     document.getElementById("sel").addEventListener("click", () => { selecting = !selecting; checked.clear(); renderList(); });
+    document.querySelectorAll(".view-seg [data-view]").forEach((b) => b.addEventListener("click", () => {
+      if ((b.dataset.view === "grid") !== isGrid()) setView(b.dataset.view);
+    }));
 
     if (!vis.length) {
       listEl.innerHTML = `<div class="empty"><div class="big">🔎</div>${S.query ? "Aucun compte ne correspond à ta recherche." : "Aucun compte ici pour l'instant."}</div>`;
     } else {
       const showGroups = S.filter === "all" && !S.query;
+      const grid = isGrid();
       let html = "", lastFav = null;
+      const close = () => { if (grid && html) html += "</div>"; };
       for (const a of vis) {
-        if (showGroups && a.favorite !== lastFav) {
-          html += `<div class="group-title">${a.favorite ? "⭐ Favoris" : "Tous"}</div>`;
+        if ((showGroups && a.favorite !== lastFav) || (grid && !html)) {
+          close();
+          if (showGroups) html += `<div class="group-title">${a.favorite ? "⭐ Favoris" : "Tous"}</div>`;
+          if (grid) html += `<div class="tiles">`;
           lastFav = a.favorite;
         }
-        const cls = selecting ? (checked.has(a.id) ? "checked" : "") : (a.id === S.selectedId ? "on" : "");
-        html += `<div class="item ${cls}" data-id="${PP.esc(a.id)}">
-          ${selecting ? `<div class="ck">${checked.has(a.id) ? "✓" : ""}</div>` : ""}
-          ${PP.logo(a)}
-          <div class="t"><b>${PP.esc(a.name)}</b><small>${PP.esc(PP.applyMask(a.login, a.login_mask) || a.category)}</small></div>
-          ${a.favorite ? `<span class="star">★</span>` : ""}
-        </div>`;
+        const cls = selecting ? (checked.has(a.id) ? "checked" : "") : (!grid && a.id === S.selectedId ? "on" : "");
+        const ck = selecting ? `<div class="ck">${checked.has(a.id) ? "✓" : ""}</div>` : "";
+        const sub = PP.esc(PP.applyMask(a.login, a.login_mask) || a.category);
+        html += grid
+          ? `<div class="item tile ${cls}" data-id="${PP.esc(a.id)}">${ck}
+              ${a.favorite ? `<span class="star">★</span>` : ""}${PP.logo(a, "lg")}
+              <b>${PP.esc(a.name)}</b><small>${sub}</small></div>`
+          : `<div class="item ${cls}" data-id="${PP.esc(a.id)}">${ck}
+              ${PP.logo(a)}
+              <div class="t"><b>${PP.esc(a.name)}</b><small>${sub}</small></div>
+              ${a.favorite ? `<span class="star">★</span>` : ""}
+            </div>`;
       }
+      close();
       listEl.innerHTML = html;
       listEl.querySelectorAll(".item").forEach((it) =>
         it.addEventListener("click", () => {
           const id = it.dataset.id;
           if (selecting) { checked.has(id) ? checked.delete(id) : checked.add(id); }
+          else if (isGrid()) { revealed = false; return openDetail(accounts.find((a) => a.id === id)); }
           else { S.selectedId = id; revealed = false; }
           renderList();
         })
@@ -181,6 +237,7 @@
         it.addEventListener("dblclick", () => { if (!selecting) PP.views.form.openAccount(accounts.find((a) => a.id === it.dataset.id)); })
       );
     }
+    renderAz(vis);
     renderBulk();
     renderDetail();
   }
@@ -265,6 +322,15 @@
     return `<div class="strength" style="--c:${colors[s]}">${[1, 2, 3, 4].map((i) => `<i class="${i <= s ? "on" : ""}"></i>`).join("")}<span>${labels[s]}</span></div>`;
   }
 
+  // Vue grille : la fiche s'ouvre dans une fenêtre par-dessus.
+  function openDetail(a) {
+    if (!a) return;
+    const m = PP.modal.open(`<div class="detail in-modal"></div>
+      <div class="modal-foot"><button class="btn btn-ghost" id="dm-close">Fermer</button></div>`, { cls: "wide" });
+    m.querySelector("#dm-close").addEventListener("click", () => PP.modal.close());
+    fillDetail(m.querySelector(".detail"), a, () => openDetail(accounts.find((x) => x.id === a.id)));
+  }
+
   function renderDetail() {
     const d = document.getElementById("detail");
     if (!d) return;
@@ -277,6 +343,10 @@
       d.innerHTML = `<div class="empty" style="height:100%;justify-content:center"><div class="big">🗝️</div>Sélectionne un compte ou crée-en un nouveau.</div>`;
       return;
     }
+    fillDetail(d, a, renderDetail);
+  }
+
+  function fillDetail(d, a, redraw) {
     const profs = S.profiles.filter((p) => a.profiles.includes(p.id));
     const login = PP.applyMask(a.login, a.login_mask);
     const pw = revealed ? PP.applyMask(a.password, a.password_mask) : "•".repeat(Math.min(14, Math.max(8, a.password.length)));
@@ -301,14 +371,16 @@
           <button class="icon-btn" id="cp" title="Copier le mot de passe">${PP.icon.copy}</button></div>
       </div>
       <div class="meta"><span>Créé le ${new Date(a.created).toLocaleDateString("fr-FR")}</span><span>Modifié le ${new Date(a.updated).toLocaleDateString("fr-FR")}</span></div>`;
-    d.querySelector("#eye").addEventListener("click", () => { revealed = !revealed; renderDetail(); });
+    d.querySelector("#eye").addEventListener("click", () => { revealed = !revealed; redraw(); });
     d.querySelector("#cp").addEventListener("click", () => PP.copySecret(a.password));
     const cl = d.querySelector("#cl");
     if (cl) cl.addEventListener("click", () => PP.copyPlain(a.login));
     d.querySelector("#edit").addEventListener("click", () => PP.views.form.openAccount(a));
+    const inModal = d.classList.contains("in-modal");
     d.querySelector("#fav").addEventListener("click", async () => {
       await PP.call("save_account", { ...a, favorite: !a.favorite });
       await V.afterChange(false);
+      if (inModal) redraw(); // la fenêtre reste ouverte avec l'étoile à jour
     });
     d.querySelector("#del").addEventListener("click", async () => {
       if (!(await PP.confirm(`Supprimer « ${a.name} » ?`, "Ce compte sera définitivement supprimé (une sauvegarde automatique reste disponible dans les réglages).", { ok: "Supprimer", danger: true }))) return;

@@ -228,3 +228,12 @@ def test_pas_de_longueur_pour_un_mot_de_passe(tmp_path):
     api.set_lock("pin", "1357")
     api.set_lock("password", "motdepasse")
     assert make_api(tmp_path).get_state()["pin_length"] is None
+
+
+def test_vue_liste_ou_grille_enregistree(tmp_path):
+    VaultStore(tmp_path / "vault.json").save(sample_vault())
+    api = make_api(tmp_path)
+    assert api.get_settings()["view"] == "list"
+    assert api.save_settings({"view": "grid"})["view"] == "grid"
+    assert make_api(tmp_path).get_settings()["view"] == "grid"
+    assert api.save_settings({"view": "n'importe quoi"})["view"] == "grid"

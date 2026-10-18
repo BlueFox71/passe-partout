@@ -347,3 +347,29 @@ select.input option { background: #1a0b2e; }
 .suggest .opt small { color: var(--faint); margin-left: auto; font-size: 11px; }
 .suggest .opt.on, .suggest .opt:hover { background: linear-gradient(90deg, rgba(255, 61, 154, .22), rgba(124, 58, 237, .12)); }
 .logo-hint { font-size: 12px; color: var(--cyan); min-height: 16px; }
+
+/* ---------- index alphabétique et vue grille ---------- */
+.list-body { flex: 1; display: flex; min-height: 0; }
+.list-body .list-scroll { flex: 1; }
+.az { width: 22px; flex: none; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 6px 4px 10px 0; user-select: none; }
+.az b { font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 4px; border-radius: 5px; cursor: pointer; color: var(--muted); transition: all .12s; }
+.az b:hover { color: #fff; background: rgba(255, 61, 154, .3); box-shadow: 0 0 8px rgba(255, 61, 154, .5); }
+.az b.off { color: rgba(255, 255, 255, .16); cursor: default; background: none; box-shadow: none; }
+.item.flash { animation: flash 1s ease; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 2px var(--cyan), 0 0 18px rgba(0, 229, 255, .6); } 100% { box-shadow: none; } }
+.view-seg button { padding: 5px 8px; display: inline-flex; }
+.view-seg svg { width: 15px; height: 15px; }
+.list.grid-mode { flex: 1; width: auto; border-right: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 4px 4px 8px; }
+.item.tile {
+  flex-direction: column; text-align: center; gap: 8px; padding: 18px 10px 14px; border-radius: 16px;
+  background: var(--glass); border: 1px solid var(--line); transition: transform .15s, border-color .2s, box-shadow .2s;
+}
+.item.tile:hover { transform: translateY(-2px); border-color: rgba(255, 61, 154, .5); box-shadow: 0 8px 24px rgba(255, 61, 154, .2); background: var(--glass-strong); }
+.item.tile b { font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item.tile small { color: var(--faint); font-size: 12px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -4px; }
+.item.tile .star { position: absolute; top: 8px; right: 10px; }
+.item.tile .ck { position: absolute; top: 8px; left: 8px; }
+.logo.lg { width: 64px; height: 64px; border-radius: 17px; font-size: 26px; }
+.modal.wide { width: 760px; }
+.detail.in-modal { padding: 4px 0 0; overflow: visible; }

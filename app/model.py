@@ -5,7 +5,7 @@ import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 
-DEFAULT_SETTINGS = {"autolock_minutes": 10}
+DEFAULT_SETTINGS = {"autolock_minutes": 10, "view": "list"}
 
 
 def new_id() -> str:
