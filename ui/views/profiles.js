@@ -10,7 +10,7 @@
         <h1>Qui est-ce ?</h1>
         <div class="profiles">
           ${ps.map((p) => `
-            <div class="profile-tile" data-p="${p.id}">
+            <div class="profile-tile" data-p="${PP.esc(p.id)}">
               ${avatarBig(p)}<span>${PP.esc(p.name)}</span>
             </div>`).join("")}
           ${ps.length > 1 ? `<div class="profile-tile" data-p="*"><div class="av all">${PP.icon.users.replace("<svg", '<svg style="width:56px;height:56px"')}</div><span>Tout le monde</span></div>` : ""}
@@ -28,7 +28,7 @@
 
   function avatarBig(p) {
     if (p.avatar) return `<div class="av"><img src="${PP.esc(p.avatar)}" alt=""></div>`;
-    const c = p.color || PP.colorFor(p.name);
+    const c = PP.safeColor(p.color, p.name);
     return `<div class="av" style="background:linear-gradient(135deg,${c},${PP.shade(c)})">${PP.esc(PP.initial(p.name))}</div>`;
   }
 
@@ -74,39 +74,66 @@
       });
     });
 
+  // Premier lancement : prénom du premier profil et choix du verrou. L'import Excel est dans les réglages.
   V.welcome = () => {
-    let mode = "import";
+    let mode = "pin";
     const app = PP.render(`
       <div class="screen-center">
         ${PP.brand("big-brand")}
         <div class="glass" style="width:560px;padding:28px;display:flex;flex-direction:column;gap:18px">
           <div><h2 style="margin:0 0 6px">Bienvenue !</h2>
-            <div style="color:var(--muted)">Pour commencer, tu peux reprendre ton fichier Excel de mots de passe ou partir de zéro.</div></div>
-          <div class="choice-cards">
-            <div class="choice-card on" data-m="import"><div class="ic">📥</div><b>Importer mon Excel</b><small>Reprend tous les comptes de ton fichier .xlsx</small></div>
-            <div class="choice-card" data-m="empty"><div class="ic">✨</div><b>Partir de zéro</b><small>Un coffre vide, tu ajoutes tes comptes au fur et à mesure</small></div>
-          </div>
+            <div style="color:var(--muted)">Crée ton coffre : ton prénom pour le premier profil, puis la façon de le protéger.</div></div>
           <div class="field"><label>Ton prénom (premier profil)</label><input class="input" id="wname" placeholder="Ex. Jules"></div>
+          <div class="field"><label>Protection</label>
+            <div class="seg" id="wmode">
+              <button data-m="pin" class="on">Code PIN</button><button data-m="password">Mot de passe</button><button data-m="none">Aucune</button>
+            </div></div>
+          <div id="wlock"></div>
           <div class="err" id="werr"></div>
-          <div class="row" style="justify-content:flex-end"><button class="btn btn-primary" id="wgo">Continuer</button></div>
+          <div class="row" style="justify-content:space-between">
+            <span class="hint">Tu pourras importer ton fichier Excel ensuite, dans les Réglages.</span>
+            <button class="btn btn-primary" id="wgo">Créer mon coffre</button>
+          </div>
         </div>
       </div>`);
-    app.querySelectorAll("[data-m]").forEach((c) =>
-      c.addEventListener("click", () => {
-        mode = c.dataset.m;
-        app.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === c));
-      })
-    );
-    app.querySelector("#wname").focus();
-    app.querySelector("#wgo").addEventListener("click", async () => {
-      const name = app.querySelector("#wname").value.trim();
-      if (!name) { app.querySelector("#werr").textContent = "Indique un prénom pour ton profil."; return; }
-      if (mode === "import") {
-        const r = await PP.call("import_excel", null, name);
-        if (!r) return; // sélection de fichier annulée
-        PP.toast(`${r.added} comptes importés`, { seconds: 4 });
-      } else {
+    const $ = (s) => app.querySelector(s);
+    const drawLock = () => {
+      app.querySelectorAll("#wmode [data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === mode));
+      if (mode === "none") {
+        $("#wlock").innerHTML = `<div class="warn-box">Sans protection, tes données seront enregistrées en clair sur ce PC.
+          Tu pourras ajouter un verrou plus tard dans les Réglages.</div>`;
+        return;
+      }
+      const isPin = mode === "pin";
+      const attrs = isPin ? 'inputmode="numeric" maxlength="12"' : "";
+      $("#wlock").innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="field"><label>${isPin ? "Code PIN (6 chiffres conseillés)" : "Mot de passe"}</label><input class="input" id="wc1" type="password" ${attrs}></div>
+          <div class="field"><label>Confirmer</label><input class="input" id="wc2" type="password" ${attrs}></div>
+        </div>
+        <div class="hint" style="margin-top:8px">Toutes tes données seront chiffrées avec ce code. <b>S'il est oublié, elles ne pourront pas être récupérées.</b></div>`;
+    };
+    app.querySelectorAll("#wmode [data-m]").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.m; drawLock(); }));
+    drawLock();
+    $("#wname").focus();
+    $("#wgo").addEventListener("click", async () => {
+      const err = $("#werr");
+      const name = $("#wname").value.trim();
+      if (!name) { err.textContent = "Indique un prénom pour ton profil."; return; }
+      let code = null;
+      if (mode !== "none") {
+        const a = $("#wc1").value, b = $("#wc2").value;
+        if (mode === "pin" && !/^[0-9]{4,12}$/.test(a)) { err.textContent = "Le PIN doit contenir de 4 à 12 chiffres."; return; }
+        if (mode === "password" && a.length < 6) { err.textContent = "Le mot de passe doit faire au moins 6 caractères."; return; }
+        if (a !== b) { err.textContent = "Les deux saisies ne correspondent pas."; return; }
+        code = a;
+      }
+      $("#wgo").disabled = true;
+      try {
         await PP.call("start_empty", name);
+        if (code) await PP.call("set_lock", mode, code);
+      } finally {
+        $("#wgo").disabled = false;
       }
       PP.route();
     });

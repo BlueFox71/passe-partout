@@ -13,13 +13,13 @@
       <div class="screen-center">
         ${PP.brand("big-brand")}
         <div class="lock-card glass">
-          <div style="color:var(--muted)">${isPin ? "Entre ton code PIN" : "Entre ton mot de passe"}</div>
+          <div style="color:var(--muted)">${isPin ? "Entre ton code PIN" : s.lock_mode === "unknown" ? "Entre ton code PIN ou ton mot de passe" : "Entre ton mot de passe"}</div>
           ${isPin
             ? `<div class="pin-dots" id="dots"></div>
                <div class="pin-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-k="${n}">${n}</button>`).join("")}
                  <button data-k="del" title="Effacer">⌫</button><button data-k="0">0</button>
                  <button data-k="ok" title="Valider" style="color:var(--pink)">✓</button></div>`
-            : `<div class="pw-wrap" style="width:100%"><input id="pw" class="input" type="password" autofocus placeholder="Mot de passe"></div>
+            : `<div class="pw-wrap" style="width:100%"><input id="pw" class="input" type="password" autofocus placeholder="${s.lock_mode === "unknown" ? "Code" : "Mot de passe"}"></div>
                <button class="btn btn-primary" id="go" style="width:100%;justify-content:center">Déverrouiller</button>`}
           <div class="err" id="err"></div>
           ${s.mock ? `<div class="hint">Maquette : le code est 123456</div>` : ""}

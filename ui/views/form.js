@@ -39,8 +39,12 @@
     };
     const onPaste = (e) => {
       if (!document.body.contains(container)) return document.removeEventListener("paste", onPaste);
-      const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+      const items = [...(e.clipboardData?.items || [])];
+      const item = items.find((i) => i.type.startsWith("image/"));
       if (!item) return; // collage de texte normal dans un champ
+      // Copie depuis Word ou une page web (image + texte) dans un champ texte : on colle le texte.
+      const inField = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || "");
+      if (inField && items.some((i) => i.type === "text/plain")) return;
       e.preventDefault();
       readFile(item.getAsFile());
       PP.toast("Image collée");
@@ -50,9 +54,65 @@
     return { redraw: draw };
   };
 
+  /* Suggestions de noms connus sous un champ « nom ». `onLogo(entry)` est appelé quand un nom connu
+     est choisi dans la liste ou tapé en entier. */
+  V.logoSuggest = (input, onLogo) => {
+    const wrap = input.parentElement;
+    wrap.classList.add("suggest-wrap");
+    let box = null, items = [], cur = -1;
+    const close = () => { if (box) box.remove(); box = null; items = []; cur = -1; };
+    const pick = (e) => {
+      input.value = e[0];
+      close();
+      onLogo(e, true);
+      input.dispatchEvent(new Event("input"));
+    };
+    const draw = () => {
+      if (!items.length) return close();
+      if (!box) { box = document.createElement("div"); box.className = "suggest"; wrap.appendChild(box); }
+      box.innerHTML = items.map((e, i) => `<div class="opt ${i === cur ? "on" : ""}" data-i="${i}">
+          <div class="logo img"><img src="${PP.esc(PP.logos.render(e))}" alt=""></div>${PP.esc(e[0])}</div>`).join("");
+      box.querySelectorAll(".opt").forEach((o) => o.addEventListener("mousedown", (ev) => { ev.preventDefault(); pick(items[+o.dataset.i]); }));
+    };
+    input.setAttribute("autocomplete", "off");
+    input.addEventListener("input", () => {
+      items = PP.logos.suggest(input.value);
+      cur = -1;
+      draw();
+      onLogo(PP.logos.find(input.value), false);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (!box) return;
+      if (ev.key === "ArrowDown") { ev.preventDefault(); cur = (cur + 1) % items.length; draw(); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); cur = (cur - 1 + items.length) % items.length; draw(); }
+      else if (ev.key === "Enter" && cur >= 0) { ev.preventDefault(); ev.stopPropagation(); pick(items[cur]); }
+      else if (ev.key === "Escape") { ev.stopPropagation(); close(); }
+    });
+    input.addEventListener("blur", () => setTimeout(close, 120));
+  };
+
+  /* Logo automatique : posé quand un nom connu est choisi ou tapé, retiré si le nom change,
+     jamais posé par-dessus une image choisie à la main (sauf choix explicite dans la liste). */
+  V.autoLogo = (input, item, zone, hint) => {
+    let auto = false;
+    V.logoSuggest(input, (entry, explicit) => {
+      if (entry && (explicit || !item.image || auto)) {
+        item.image = PP.logos.render(entry);
+        auto = true;
+        hint.textContent = `Logo « ${entry[0]} » ajouté — tu peux le changer ci-dessous.`;
+      } else if (!entry && auto) {
+        item.image = null;
+        auto = false;
+        hint.textContent = "";
+      }
+      zone.redraw();
+    });
+    return { manual: () => { auto = false; hint.textContent = ""; } };
+  };
+
   V.profileChecks = (container, selected) => {
     const draw = () => {
-      container.innerHTML = S.profiles.map((p) => `<div class="check ${selected.has(p.id) ? "on" : ""}" data-p="${p.id}">${PP.avatar(p)}${PP.esc(p.name)}</div>`).join("");
+      container.innerHTML = S.profiles.map((p) => `<div class="check ${selected.has(p.id) ? "on" : ""}" data-p="${PP.esc(p.id)}">${PP.avatar(p)}${PP.esc(p.name)}</div>`).join("");
       container.querySelectorAll("[data-p]").forEach((c) => c.addEventListener("click", () => {
         const id = c.dataset.p;
         selected.has(id) ? selected.delete(id) : selected.add(id);
@@ -75,7 +135,8 @@
     const m = PP.modal.open(`
       <h2>${account ? "Modifier le compte" : "Nouveau compte"}</h2>
       <div class="grid2">
-        <div class="field"><label>Nom</label><input class="input" id="f-name" value="${PP.esc(a.name)}" placeholder="Ex. Boursorama"></div>
+        <div class="field"><label>Nom</label><div><input class="input" id="f-name" value="${PP.esc(a.name)}" placeholder="Ex. Netflix, Amazon, Impôts…"></div>
+          <div class="logo-hint" id="f-hint"></div></div>
         <div class="field"><label>Catégorie</label><input class="input" id="f-cat" list="f-cats" value="${PP.esc(a.category)}" placeholder="Ex. Banque">
           <datalist id="f-cats">${cats.map((c) => `<option value="${PP.esc(c)}">`).join("")}</datalist></div>
         <div class="field"><label>Identifiant</label><input class="input" id="f-login" value="${PP.esc(a.login)}" placeholder="Adresse mail, numéro…" spellcheck="false"></div>
@@ -120,8 +181,9 @@
       $("#f-eye").innerHTML = showPw ? PP.icon.eyeOff : PP.icon.eye;
       preview();
     });
-    const zone = V.imageZone($("#f-img"), () => a.image, (v) => (a.image = v), () => $("#f-name").value);
-    $("#f-name").addEventListener("input", () => { if (!a.image) zone.redraw(); });
+    let logo = null;
+    const zone = V.imageZone($("#f-img"), () => a.image, (v) => { a.image = v; if (logo) logo.manual(); }, () => $("#f-name").value);
+    logo = V.autoLogo($("#f-name"), a, zone, $("#f-hint"));
     V.profileChecks($("#f-profs"), profs);
     $("#f-fav").addEventListener("click", (e) => { e.preventDefault(); a.favorite = !a.favorite; $("#f-fav").classList.toggle("on", a.favorite); });
     $("#f-cancel").addEventListener("click", () => PP.modal.close());

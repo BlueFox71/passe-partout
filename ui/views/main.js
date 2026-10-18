@@ -37,17 +37,23 @@
 
   const currentProfile = () => S.profiles.find((p) => p.id === S.profileId) || null;
 
+  // Catégories regroupées sans tenir compte de la casse ni des accents (« Banque » = « banque »).
+  const catOf = (a) => a.category || "Sans catégorie";
   function categories() {
     const m = new Map();
-    for (const a of accounts) m.set(a.category || "Sans catégorie", (m.get(a.category || "Sans catégorie") || 0) + 1);
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], "fr", { sensitivity: "base" }));
+    for (const a of accounts) {
+      const k = PP.normalize(catOf(a));
+      const cur = m.get(k);
+      m.set(k, cur ? [cur[0], cur[1] + 1] : [catOf(a), 1]);
+    }
+    return [...m.values()].sort((a, b) => a[0].localeCompare(b[0], "fr", { sensitivity: "base" }));
   }
 
   // Liste affichée = filtre de navigation + recherche (c'est aussi ce qui est exporté).
   V.visible = () => {
     let list = accounts;
     if (S.filter === "fav") list = list.filter((a) => a.favorite);
-    else if (S.filter.startsWith("cat:")) list = list.filter((a) => (a.category || "Sans catégorie") === S.filter.slice(4));
+    else if (S.filter.startsWith("cat:")) list = list.filter((a) => PP.normalize(catOf(a)) === PP.normalize(S.filter.slice(4)));
     return PP.search(list, S.query);
   };
 
@@ -155,7 +161,7 @@
           lastFav = a.favorite;
         }
         const cls = selecting ? (checked.has(a.id) ? "checked" : "") : (a.id === S.selectedId ? "on" : "");
-        html += `<div class="item ${cls}" data-id="${a.id}">
+        html += `<div class="item ${cls}" data-id="${PP.esc(a.id)}">
           ${selecting ? `<div class="ck">${checked.has(a.id) ? "✓" : ""}</div>` : ""}
           ${PP.logo(a)}
           <div class="t"><b>${PP.esc(a.name)}</b><small>${PP.esc(PP.applyMask(a.login, a.login_mask) || a.category)}</small></div>
@@ -232,7 +238,7 @@
       m.querySelector("#bp").innerHTML = S.profiles.map((p) => {
         const st = state[p.id];
         const style = st === "add" ? "border-color:var(--ok);background:rgba(61,255,176,.12)" : st === "remove" ? "border-color:var(--danger);background:rgba(255,77,109,.12);text-decoration:line-through" : "";
-        return `<div class="check" data-p="${p.id}" style="${style}">${PP.avatar(p)}${PP.esc(p.name)}${st === "add" ? " +" : st === "remove" ? " −" : ""}</div>`;
+        return `<div class="check" data-p="${PP.esc(p.id)}" style="${style}">${PP.avatar(p)}${PP.esc(p.name)}${st === "add" ? " +" : st === "remove" ? " −" : ""}</div>`;
       }).join("");
       m.querySelectorAll("[data-p]").forEach((c) => c.addEventListener("click", () => {
         const id = c.dataset.p;

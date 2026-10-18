@@ -99,8 +99,8 @@ select.input option { background: #1a0b2e; }
 }
 .logo img { width: 100%; height: 100%; object-fit: cover; }
 .logo.xl { width: 84px; height: 84px; border-radius: 22px; font-size: 36px; box-shadow: 0 0 30px rgba(255, 61, 154, .25); }
-.logo.img { background: rgba(255,255,255,.92) !important; }
-.logo.img img { object-fit: contain; padding: 4px; }
+.logo.img { background: #fff !important; }
+.logo.img img { object-fit: cover; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px;
@@ -332,3 +332,16 @@ select.input option { background: #1a0b2e; }
 }
 .toast.error { border-color: rgba(255, 77, 109, .7); }
 .toast .bar { height: 3px; background: var(--cyan); border-radius: 2px; box-shadow: 0 0 6px var(--cyan); }
+
+/* ---------- suggestions de noms (bibliothèque de logos) ---------- */
+.suggest-wrap { position: relative; }
+.suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30; padding: 6px; max-height: 320px; overflow-y: auto;
+  background: linear-gradient(160deg, rgba(43, 16, 74, .99), rgba(20, 10, 38, .99)); border: 1px solid var(--line-strong);
+  border-radius: 14px; box-shadow: 0 18px 40px rgba(0, 0, 0, .55), 0 0 24px rgba(255, 61, 154, .2); animation: pop .15s ease;
+}
+.suggest .opt { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 10px; cursor: pointer; }
+.suggest .opt .logo { width: 30px; height: 30px; border-radius: 8px; }
+.suggest .opt small { color: var(--faint); margin-left: auto; font-size: 11px; }
+.suggest .opt.on, .suggest .opt:hover { background: linear-gradient(90deg, rgba(255, 61, 154, .22), rgba(124, 58, 237, .12)); }
+.logo-hint { font-size: 12px; color: var(--cyan); min-height: 16px; }

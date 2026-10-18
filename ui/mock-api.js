@@ -56,8 +56,9 @@
   ];
   let settings = { autolock_minutes: 10 };
   let lock = { mode: params.has("sansverrou") ? "none" : "pin", code: "123456" };
-  let locked = lock.mode !== "none";
   let hasData = !params.has("bienvenue");
+  if (!hasData) lock = { mode: "none", code: null };
+  let locked = lock.mode !== "none";
   let fails = 0, waitUntil = 0;
   const backups = [
     { name: "vault-20261018-101500.json", date: "18/10/2026 10:15" },
@@ -186,6 +187,13 @@
     async set_lock(mode, code) { lock = { mode, code }; return {}; },
     async get_settings() { return clone(settings); },
     async save_settings(s) { settings = { ...settings, ...s }; return clone(settings); },
+    async open_backups_folder() { return {}; },
+    async set_images(accs, cards) {
+      let n = 0;
+      for (const [list, map] of [[accounts, accs], [giftcards, cards]])
+        for (const x of list) if (map[x.id] && !x.image) { x.image = map[x.id]; n++; }
+      return n;
+    },
     async preview_import() { return { path: "C:/maquette/mdps.xlsx", added: 12, skipped: 118 }; },
     async import_excel(path, profileName) {
       if (!hasData) { hasData = true; profiles.splice(1); profiles[0].name = profileName || "Moi"; }

@@ -5,7 +5,8 @@
 
   V.render = async (container) => {
     const backups = await PP.call("list_backups");
-    const modeLabel = { none: "Aucun", pin: "Code PIN", password: "Mot de passe" };
+    const modeLabel = { none: "Aucun", pin: "Code PIN", password: "Mot de passe", unknown: "Code" };
+    const missing = await missingLogos();
     container.innerHTML = `
       <div class="settings">
         <h2>Réglages</h2>
@@ -31,9 +32,17 @@
           <h3>👥 Profils</h3>
           <p>Les profils servent à ranger les comptes (par exemple un pour chaque personne du couple).</p>
           ${S.profiles.map((p) => `<div class="prof-row">${PP.avatar(p)}<div style="flex:1;font-weight:600">${PP.esc(p.name)}</div>
-            <button class="btn btn-ghost" data-pe="${p.id}" style="padding:6px 12px">${PP.icon.edit} Modifier</button>
-            ${S.profiles.length > 1 ? `<button class="icon-btn" data-pd="${p.id}" title="Supprimer">${PP.icon.trash}</button>` : ""}</div>`).join("")}
+            <button class="btn btn-ghost" data-pe="${PP.esc(p.id)}" style="padding:6px 12px">${PP.icon.edit} Modifier</button>
+            ${S.profiles.length > 1 ? `<button class="icon-btn" data-pd="${PP.esc(p.id)}" title="Supprimer">${PP.icon.trash}</button>` : ""}</div>`).join("")}
           <div style="margin-top:12px"><button class="btn btn-ghost" id="padd">${PP.icon.plus} Ajouter un profil</button></div>
+        </div>
+
+        <div class="card glass">
+          <h3>🖼️ Logos</h3>
+          <p>Passe-Partout connaît plus de 3 800 marques. Les comptes et cartes sans image peuvent recevoir automatiquement le logo de leur marque.</p>
+          <button class="btn btn-ghost" id="logos" ${missing.count ? "" : "disabled"}>${missing.count
+            ? `Ajouter ${missing.count} logo${missing.count > 1 ? "s" : ""} manquant${missing.count > 1 ? "s" : ""}`
+            : "Aucun logo à ajouter"}</button>
         </div>
 
         <div class="card glass">
@@ -44,7 +53,8 @@
 
         <div class="card glass">
           <h3>🛟 Sauvegardes automatiques</h3>
-          <p>Les 5 dernières versions sont conservées à chaque enregistrement${S.lock_mode !== "none" ? ", chiffrées comme le reste" : ""}.</p>
+          <p>Les 5 dernières versions sont conservées à chaque enregistrement${S.lock_mode !== "none" ? ", chiffrées comme le reste" : ""}.
+            <a href="#" id="bkdir" style="color:var(--cyan)">Ouvrir le dossier</a></p>
           ${backups.length ? backups.map((b) => `<div class="prof-row"><div style="flex:1">${PP.esc(b.date)}</div>
             <button class="btn btn-ghost" data-b="${PP.esc(b.name)}" style="padding:6px 12px">Restaurer</button></div>`).join("")
             : `<div class="hint">Aucune sauvegarde pour l'instant.</div>`}
@@ -67,6 +77,12 @@
       if (p) { await PP.refreshState(); PP.views.main.show(); }
     });
     $("#imp").addEventListener("click", importExcel);
+    $("#bkdir").addEventListener("click", (e) => { e.preventDefault(); PP.call("open_backups_folder"); });
+    $("#logos").addEventListener("click", async () => {
+      const n = await applyMissingLogos();
+      PP.toast(`${n} logo${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}`);
+      await PP.views.main.afterChange();
+    });
     container.querySelectorAll("[data-b]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await PP.confirm("Restaurer cette sauvegarde ?", "Les modifications faites après cette date seront perdues (l'état actuel est lui-même sauvegardé avant).", { ok: "Restaurer" }))) return;
       await PP.call("restore_backup", b.dataset.b);
@@ -120,7 +136,7 @@
     const m = PP.modal.open(`
       <h2>Supprimer le profil « ${PP.esc(p.name)} » ?</h2>
       <p style="color:var(--muted);margin:0 0 14px">Aucun compte n'est supprimé. Les comptes et cartes qui n'appartiennent qu'à ce profil seront rattachés à :</p>
-      <select class="input" id="ra">${others.map((o) => `<option value="${o.id}">${PP.esc(o.name)}</option>`).join("")}</select>
+      <select class="input" id="ra">${others.map((o) => `<option value="${PP.esc(o.id)}">${PP.esc(o.name)}</option>`).join("")}</select>
       <div class="modal-foot"><button class="btn btn-ghost" id="no">Annuler</button><button class="btn btn-danger" id="ok">Supprimer le profil</button></div>`, { cls: "sm" });
     m.querySelector("#no").addEventListener("click", () => PP.modal.close());
     m.querySelector("#ok").addEventListener("click", async () => {
@@ -133,6 +149,21 @@
     });
   }
 
+  // Comptes et cartes sans image dont le nom correspond à un logo connu.
+  async function missingLogos() {
+    const [accs, cards] = await Promise.all([PP.call("list_accounts", null), PP.call("list_giftcards", null)]);
+    const pick = (list) => list.filter((x) => !x.image).map((x) => [x.id, PP.logos.find(x.name)]).filter((x) => x[1]);
+    const a = pick(accs), g = pick(cards);
+    return { accounts: a, giftcards: g, count: a.length + g.length };
+  }
+
+  async function applyMissingLogos() {
+    const m = await missingLogos();
+    if (!m.count) return 0;
+    const map = (list) => Object.fromEntries(list.map(([id, e]) => [id, PP.logos.render(e)]));
+    return PP.call("set_images", map(m.accounts), map(m.giftcards));
+  }
+
   async function importExcel() {
     const cur = S.profiles.find((p) => p.id === S.profileId) || S.profiles[0];
     const pre = await PP.call("preview_import", null);
@@ -143,7 +174,8 @@
       { ok: `Ajouter ${pre.added} élément(s)` });
     if (!ok) return;
     const r = await PP.call("import_excel", pre.path, cur.name);
-    PP.toast(`${r.added} élément(s) ajouté(s), ${r.skipped} déjà présent(s)`, { seconds: 5 });
+    const logos = await applyMissingLogos();
+    PP.toast(`${r.added} élément(s) ajouté(s), ${r.skipped} déjà présent(s)${logos ? `, ${logos} logo(s) ajouté(s)` : ""}`, { seconds: 6 });
     await PP.views.main.afterChange();
   }
 })();

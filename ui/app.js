@@ -6,8 +6,85 @@
   PP.esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  const LIGATURES = { "œ": "oe", "Œ": "oe", "æ": "ae", "Æ": "ae", "ß": "ss" };
   PP.normalize = (s) =>
-    String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    String(s ?? "").replace(/[œŒæÆß]/g, (c) => LIGATURES[c])
+      .normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+  /* ---------- bibliothèque de logos (ui/logos.js, Simple Icons) ----------
+     Entrée : [titre, couleur, chemin SVG 24×24 | null, [alias], populaire, sigle | null] */
+  PP.logos = (() => {
+    let index = null;
+    const cache = new Map();
+    const names = (e) => [e[0], ...e[3]];
+    const build = () => {
+      index = new Map();
+      for (const e of window.PP_LOGOS || []) for (const n of names(e)) {
+        const k = PP.normalize(n);
+        if (!index.has(k)) index.set(k, e);
+      }
+    };
+    const luminance = (hex) => {
+      const n = parseInt(hex, 16);
+      const ch = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * ch(n >> 16) + 0.7152 * ch((n >> 8) & 255) + 0.0722 * ch(n & 255);
+    };
+    return {
+      // Logo dont le titre ou un alias correspond exactement au nom (casse et accents ignorés).
+      find(name) {
+        if (!index) build();
+        return index.get(PP.normalize(name)) || null;
+      },
+      // Suggestions : exact, puis début du nom, puis début d'un mot, puis contenu ; marques courantes d'abord.
+      suggest(query, limit = 8) {
+        const q = PP.normalize(query);
+        if (!q) return [];
+        const out = [];
+        for (const e of window.PP_LOGOS || []) {
+          let best = 9;
+          for (const n of names(e)) {
+            const k = PP.normalize(n);
+            const s = k === q ? 0 : k.startsWith(q) ? 1 : k.split(/[\s.\-&'+/]/).some((w) => w.startsWith(q)) ? 2 : q.length >= 3 && k.includes(q) ? 3 : 9;
+            if (s < best) best = s;
+          }
+          if (best < 9) out.push([best + (e[4] ? 0 : 0.5), e]);
+        }
+        out.sort((a, b) => a[0] - b[0] || a[1][0].length - b[1][0].length);
+        return out.slice(0, limit).map((x) => x[1]);
+      },
+      // Rend le logo en PNG carré 256 px (data URL) : glyphe sur la couleur de la marque.
+      render(e) {
+        if (cache.has(e[0])) return cache.get(e[0]);
+        const [, hex, path, , , letters] = e;
+        const c = document.createElement("canvas");
+        c.width = c.height = 256;
+        const g = c.getContext("2d");
+        const base = "#" + hex;
+        const grad = g.createLinearGradient(0, 0, 256, 256);
+        grad.addColorStop(0, base);
+        grad.addColorStop(1, PP.shade(base));
+        g.fillStyle = path ? base : grad;
+        g.fillRect(0, 0, 256, 256);
+        const ink = luminance(hex) > 0.6 ? "#16101f" : "#ffffff";
+        g.fillStyle = ink;
+        if (path) {
+          g.translate(52, 52);
+          g.scale(152 / 24, 152 / 24);
+          g.fill(new Path2D(path));
+        } else {
+          const t = letters || PP.initial(e[0]);
+          const size = [0, 140, 112, 92, 74, 62, 54][Math.min(t.length, 6)];
+          g.font = `800 ${size}px "Segoe UI", system-ui, sans-serif`;
+          g.textAlign = "center";
+          g.textBaseline = "middle";
+          g.fillText(t, 128, 136);
+        }
+        const url = c.toDataURL("image/png");
+        cache.set(e[0], url);
+        return url;
+      },
+    };
+  })();
 
   // '#' consomme un caractère de la valeur, le reste du modèle est inséré tel quel ;
   // le surplus de la valeur est ajouté à la suite.
@@ -59,9 +136,10 @@
     if (item.image) return `<div class="logo img ${cls}"><img src="${PP.esc(item.image)}" alt=""></div>`;
     return `<div class="logo ${cls}" style="background:linear-gradient(135deg,${PP.colorFor(name)},${PP.shade(PP.colorFor(name))})">${PP.esc(PP.initial(name))}</div>`;
   };
+  PP.safeColor = (c, name) => (/^#[0-9a-fA-F]{6}$/.test(c || "") ? c : PP.colorFor(name));
   PP.avatar = (p, cls = "") => {
     if (p.avatar) return `<div class="logo ${cls}"><img src="${PP.esc(p.avatar)}" alt=""></div>`;
-    const c = p.color || PP.colorFor(p.name);
+    const c = PP.safeColor(p.color, p.name);
     return `<div class="logo ${cls}" style="background:linear-gradient(135deg,${c},${PP.shade(c)})">${PP.esc(PP.initial(p.name))}</div>`;
   };
   PP.shade = (hex) => {

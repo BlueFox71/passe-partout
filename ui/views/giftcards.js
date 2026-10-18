@@ -37,7 +37,7 @@
   }
 
   function tile(g) {
-    return `<div class="gc ${isFinished(g) ? "done" : ""}" data-g="${g.id}">
+    return `<div class="gc ${isFinished(g) ? "done" : ""}" data-g="${PP.esc(g.id)}">
       <div class="top">${PP.logo(g)}<b style="font-size:16px">${PP.esc(g.name)}</b></div>
       <div class="amount">${PP.money(g.remaining)}</div>
       ${g.initial ? `<div class="hint">sur ${PP.money(g.initial)}</div>` : ""}
@@ -117,7 +117,8 @@
     const m = PP.modal.open(`
       <h2>${card ? "Modifier la carte" : "Nouvelle carte cadeau"}</h2>
       <div class="grid2">
-        <div class="field full"><label>Enseigne / nom</label><input class="input" id="c-name" value="${PP.esc(g.name)}" placeholder="Ex. Fnac"></div>
+        <div class="field full"><label>Enseigne / nom</label><div><input class="input" id="c-name" value="${PP.esc(g.name)}" placeholder="Ex. Fnac, Amazon, Decathlon…"></div>
+          <div class="logo-hint" id="c-hint"></div></div>
         <div class="field"><label>Code</label><input class="input" id="c-code" value="${PP.esc(g.code)}" spellcheck="false"></div>
         <div class="field"><label>PIN</label><input class="input" id="c-pin" value="${PP.esc(g.pin || "")}" spellcheck="false"></div>
         <div class="field"><label>Montant initial (€)</label><input class="input" id="c-init" type="number" step="0.01" min="0" value="${g.initial ?? ""}"></div>
@@ -130,7 +131,9 @@
       <div class="err" id="c-err"></div>
       <div class="modal-foot"><button class="btn btn-ghost" id="c-cancel">Annuler</button><button class="btn btn-primary" id="c-save">${PP.icon.check} Enregistrer</button></div>`);
     const $ = (s) => m.querySelector(s);
-    PP.views.form.imageZone($("#c-img"), () => g.image, (v) => (g.image = v), () => $("#c-name").value);
+    let logo = null;
+    const zone = PP.views.form.imageZone($("#c-img"), () => g.image, (v) => { g.image = v; if (logo) logo.manual(); }, () => $("#c-name").value);
+    logo = PP.views.form.autoLogo($("#c-name"), g, zone, $("#c-hint"));
     PP.views.form.profileChecks($("#c-profs"), profs);
     $("#c-name").focus();
     $("#c-init").addEventListener("input", () => { if (!card && !$("#c-rem").dataset.touched) $("#c-rem").value = $("#c-init").value; });
