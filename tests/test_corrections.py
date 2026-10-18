@@ -177,3 +177,25 @@ def test_ouvrir_dossier_sauvegardes(tmp_path, monkeypatch):
     monkeypatch.setattr("app.api._open_folder", lambda p: opened.append(p))
     api.open_backups_folder()
     assert opened and opened[0].endswith("backups")
+
+
+# logos posés en masse : un seul enregistrement, sans écraser une image existante
+def test_set_images_en_un_enregistrement(tmp_path):
+    VaultStore(tmp_path / "vault.json").save(sample_vault())
+    api = make_api(tmp_path)
+    accs = api.list_accounts(None)
+    api.save_account({**accs[0], "image": "data:image/png;base64,AAAA"})
+    backups_avant = len(VaultStore(tmp_path / "vault.json").list_backups())
+    n = api.set_images({a["id"]: "data:image/png;base64,BBBB" for a in accs}, {"g1": "data:image/png;base64,CCCC"})
+    assert n == 2  # 1 compte sans image + 1 carte
+    imgs = {a["name"]: a["image"] for a in api.list_accounts(None)}
+    assert imgs[accs[0]["name"]].endswith("AAAA") and imgs[accs[1]["name"]].endswith("BBBB")
+    assert api.list_giftcards(None)[0]["image"].endswith("CCCC")
+    assert len(VaultStore(tmp_path / "vault.json").list_backups()) == backups_avant + 1
+
+
+def test_set_images_refuse_autre_chose_qu_une_image(tmp_path):
+    VaultStore(tmp_path / "vault.json").save(sample_vault())
+    api = make_api(tmp_path)
+    a = api.list_accounts(None)[1]
+    assert api.set_images({a["id"]: "javascript:alert(1)"}, {}) == 0

@@ -485,6 +485,21 @@ class Api:
                 raise ValueError("Impossible de lire ce fichier Excel") from e
             return {"added": added, "skipped": skipped}
 
+    @_locked
+    def set_images(self, accounts: dict, giftcards: dict) -> int:
+        """Pose des logos sur les comptes / cartes qui n'ont pas d'image, en un seul enregistrement."""
+        v = self._vault()
+        n = 0
+        for items, wanted in ((v.accounts, accounts or {}), (v.giftcards, giftcards or {})):
+            for item in items:
+                img = wanted.get(item.id)
+                if img and not item.image and str(img).startswith("data:image/png;base64,"):
+                    item.image = img
+                    n += 1
+        if n:
+            self._save()
+        return n
+
     # ---------------------------------------------------------------- fenêtre, dossiers
     @_locked
     def save_window(self, geom: dict) -> None:
