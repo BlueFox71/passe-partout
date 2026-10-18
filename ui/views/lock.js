@@ -22,6 +22,7 @@
             : `<div class="pw-wrap" style="width:100%"><input id="pw" class="input" type="password" autofocus placeholder="${s.lock_mode === "unknown" ? "Code" : "Mot de passe"}"></div>
                <button class="btn btn-primary" id="go" style="width:100%;justify-content:center">Déverrouiller</button>`}
           <div class="err" id="err"></div>
+          ${isPin && !Number(s.pin_length) ? `<div class="hint" style="text-align:center">Valide avec ✓ cette fois-ci :<br>ensuite, le code se validera tout seul.</div>` : ""}
           ${s.mock ? `<div class="hint">Maquette : le code est 123456</div>` : ""}
         </div>
         <a href="#" id="restore-link" class="hint" style="color:var(--faint)">Problème d'accès ? Restaurer une sauvegarde</a>
