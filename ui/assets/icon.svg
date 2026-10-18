@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="ga" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="60" y2="60"><stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#7c3aed"/></linearGradient>
+    <filter id="ng" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect x="5" y="5" width="54" height="54" rx="15" fill="#140a26"/>
+  <rect x="5" y="5" width="54" height="54" rx="15" fill="none" stroke="url(#ga)" stroke-width="3.5" filter="url(#ng)"/>
+  <g transform="rotate(45 32 32)" fill="#fff">
+    <path fill-rule="evenodd" d="M18 21a11 11 0 1 1 0 22a11 11 0 0 1 0-22zm0 7a4 4 0 1 0 0 8a4 4 0 0 0 0-8z"/>
+    <rect x="27.5" y="29" width="25" height="6" rx="2"/>
+    <rect x="41" y="33.5" width="4.5" height="8" rx="1.4"/><rect x="47.5" y="33.5" width="4.5" height="5.5" rx="1.4"/>
+  </g>
+</svg>

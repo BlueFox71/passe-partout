@@ -95,15 +95,18 @@
     select: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>'),
   };
 
-  // Logo de la marque : une clé « passe-partout » néon.
+  // Logo de la marque : clé blanche dans un cadre au contour néon rose → violet (même dessin que assets/icon.svg).
   let brandSeq = 0;
   PP.brandSvg = () => {
     const id = "pg" + brandSeq++;
-    return `<svg viewBox="0 0 64 64"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
-      <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#${id})"/>
-      <circle cx="24" cy="26" r="9" fill="none" stroke="#fff" stroke-width="5"/>
-      <path d="M30.5 32.5 46 48M40 42l4-4M44 46l4-4" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
-      <circle cx="24" cy="26" r="2.5" fill="#fff"/></svg>`;
+    return `<svg viewBox="0 0 64 64"><defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="60" y2="60"><stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
+      <rect x="5" y="5" width="54" height="54" rx="15" fill="#140a26"/>
+      <rect x="5" y="5" width="54" height="54" rx="15" fill="none" stroke="url(#${id})" stroke-width="3.5"/>
+      <g transform="rotate(45 32 32)" fill="#fff">
+        <path fill-rule="evenodd" d="M18 21a11 11 0 1 1 0 22a11 11 0 0 1 0-22zm0 7a4 4 0 1 0 0 8a4 4 0 0 0 0-8z"/>
+        <rect x="27.5" y="29" width="25" height="6" rx="2"/>
+        <rect x="41" y="33.5" width="4.5" height="8" rx="1.4"/><rect x="47.5" y="33.5" width="4.5" height="5.5" rx="1.4"/>
+      </g></svg>`;
   };
   PP.brand = (cls = "") => `<div class="brand ${cls}">${PP.brandSvg()}<span>Passe-Partout</span></div>`;
 
