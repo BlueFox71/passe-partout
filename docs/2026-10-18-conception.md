@@ -198,3 +198,18 @@ Architecture interne du code, structure des fichiers, choix exact KDF (scrypt/Ar
 méthode de rendu des PNG, animations, icône de l'application, algorithme de la jauge de solidité,
 taille de fenêtre par défaut (redimensionnable, mémorisée), raccourcis clavier (au minimum
 Ctrl+F recherche, Ctrl+N nouveau).
+
+## 10. Évolutions demandées après la première livraison [Jules]
+- **Accueil** : plus de proposition d'import Excel au premier lancement ; on saisit le prénom du premier
+  profil et on choisit la protection (PIN conseillé / mot de passe / aucune). L'import reste dans les Réglages.
+- **Bibliothèque de logos** embarquée (`ui/logos.js`, ~3 800 marques, générée par `tools/build_logos.py`
+  à partir de Simple Icons CC0, plus des pastilles aux couleurs des marques françaises absentes).
+- **Formulaire** (comptes et cartes cadeaux) : en tapant le nom, une liste de noms connus est proposée ;
+  choisir un nom connu ou le taper en entier pose son logo dans le formulaire (toujours modifiable).
+  Le logo automatique ne remplace jamais une image choisie à la main.
+- **Réglages** : bouton « Ajouter les logos manquants » (aussi appliqué après un import), lien vers le
+  dossier des sauvegardes.
+- Corrections de la relecture : formats numériques Excel, restaurations sans perte, données effacées de
+  l'interface au verrouillage, dialogues non bloquants, réimport avec récapitulatif, import atomique,
+  délai anti-essais conservé au redémarrage, presse-papiers occupé, rotation EXIF, exports sans écrasement,
+  catégories et recherche insensibles aux ligatures/casse.
