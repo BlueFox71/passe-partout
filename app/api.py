@@ -503,7 +503,7 @@ class Api:
     # ---------------------------------------------------------------- fenêtre, dossiers
     @_locked
     def save_window(self, geom: dict) -> None:
-        self._config["window"] = {k: geom.get(k) for k in ("width", "height", "x", "y")}
+        self._config["window"] = {k: geom.get(k) for k in ("width", "height", "x", "y", "maximized")}
         self._write_config()
 
     @_locked
