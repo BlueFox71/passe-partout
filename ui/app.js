@@ -235,6 +235,8 @@
 
   PP.onLocked = () => {
     PP.modal.close();
+    if (PP.views.main) PP.views.main.clear();
+    PP.state.profiles = [];
     PP.state.locked = true;
     PP.views.lock.show();
   };

@@ -25,6 +25,16 @@
   };
   V.giftcards = () => giftcards;
 
+  // Au verrouillage : oublie les données déchiffrées gardées par l'interface.
+  V.clear = () => {
+    accounts = [];
+    giftcards = [];
+    checked.clear();
+    selecting = false;
+    revealed = false;
+    S.selectedId = null;
+  };
+
   const currentProfile = () => S.profiles.find((p) => p.id === S.profileId) || null;
 
   function categories() {
