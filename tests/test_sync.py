@@ -111,3 +111,22 @@ def test_callback_exception_gives_500_and_keeps_session():
     s, _ = make_session(boom)
     assert s.handle(seal(KEY, {"type": "hello"}, AAD_REQ))[0] == 500
     assert s.state == "syncing"
+
+
+@pytest.mark.parametrize("bad", [["pas", "un", "dict"], {"x": object()}])
+def test_bad_reply_gives_500_and_session_still_usable(bad):
+    replies = [bad]
+    s, _ = make_session(lambda m: replies.pop(0) if replies else {"ok": True})
+    assert s.handle(seal(KEY, {"type": "sync"}, AAD_REQ)) == (500, b"")
+    assert s.state == "syncing"
+    assert s.handle(seal(KEY, {"type": "sync"}, AAD_REQ))[0] == 200
+    assert s.state == "done"
+
+
+def test_cancel_closes_even_if_callback_raises():
+    def boom(m):
+        raise RuntimeError("x")
+    s, _ = make_session(boom)
+    assert s.handle(seal(KEY, {"type": "cancel"}, AAD_REQ))[0] == 500
+    assert s.state == "closed"
+    assert s.handle(seal(KEY, {"type": "hello"}, AAD_REQ))[0] == 410

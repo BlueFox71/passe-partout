@@ -86,16 +86,21 @@ class SyncSession:
                 return 409, b""
             self._seen.add(nonce)
             self.state = "syncing"
+            kind = msg.get("type")
             try:
                 reply = self._on_message(msg)
+                if not isinstance(reply, dict):
+                    raise TypeError("réponse invalide")
+                sealed = seal(self._key, reply, AAD_RESP)
             except Exception:
+                if kind == "cancel":
+                    self.state = "closed"
                 return 500, b""
-            kind = msg.get("type")
             if kind == "cancel":
                 self.state = "closed"
             elif kind == "sync" and reply.get("ok") is not False and "error" not in reply:
                 self.state = "done"
-            return 200, seal(self._key, reply, AAD_RESP)
+            return 200, sealed
 
     def close(self) -> None:
         with self._lock:
