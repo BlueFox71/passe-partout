@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta
 
@@ -6,12 +8,19 @@ import pytest
 from app.lockout import Lockout
 from app.model import Account, Vault
 from app.store import VaultStore
+from app.sync import b64u, unb64u
 from app.syncflow import MAX_SKEW_SECONDS, SyncFlow, validate_phone_vault
 from tests.conftest import sample_vault
 
 CODE = "123456"
 GEN = "gen-a"  # jeton de génération du coffre PC (aléatoire dans l'appli)
 NOW = datetime(2026, 10, 19, 12, 0, 0)
+QR_KEY = bytes(range(32))  # clé du QR de la session (aléatoire dans l'appli)
+PAIR = b64u(bytes([7]) * 32)  # secret d'appairage de dev1 (Ruling 21)
+
+
+def proof(pair, label, key=QR_KEY):
+    return b64u(hmac.new(unb64u(pair), key + label, hashlib.sha256).digest())
 
 
 def iso(dt):
@@ -23,7 +32,8 @@ class Env:
         self.store = VaultStore(tmp_path / "vault.json")
         self.store.vault = sample_vault()
         # téléphone déjà appairé : dev1 est dans le registre des appareils
-        self.store.vault.sync["devices"]["dev1"] = {"name": "Pixel", "last_sync": iso(NOW - timedelta(days=1))}
+        self.store.vault.sync["devices"]["dev1"] = {"name": "Pixel", "last_sync": iso(NOW - timedelta(days=1)),
+                                                     "pair": PAIR}
         if encrypted:
             self.store.set_lock(CODE)
         else:
@@ -39,7 +49,7 @@ class Env:
 
     def flow(self):
         return SyncFlow(self.store, self.lockout, self.persist, lambda: self.config, "PC-Jules",
-                        now=lambda: self.now)
+                        now=lambda: self.now, qr_key=QR_KEY)
 
 
 @pytest.fixture
@@ -51,6 +61,8 @@ def hello_msg(env=None, **kw):
     msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel", "generation": GEN,
            "last_sync": iso(NOW - timedelta(days=1)), "code_version": env.store.code_version() if env else "x",
            "has_data": True, "now": iso(NOW)}
+    if env:
+        msg["proof"] = proof(PAIR, b"pp-phone-hello")  # téléphone appairé
     msg.update(kw)
     return msg
 
@@ -202,7 +214,8 @@ def test_sync_merges_saves_backup_registers_device(env):
     reloaded = VaultStore(env.store.path)
     v = reloaded.load(CODE)
     assert "neuf" in [a.id for a in v.accounts]
-    assert v.sync["devices"]["dev1"] == {"name": "Pixel", "last_sync": iso(NOW)}
+    assert v.sync["devices"]["dev1"] == {"name": "Pixel", "last_sync": iso(NOW), "pair": PAIR}  # secret gardé
+    assert "pair" not in r
     assert "neuf" in [a["id"] for a in r["vault"]["accounts"]]
     json.dumps(r)
 
@@ -489,3 +502,84 @@ def test_validate_phone_vault_accepts_avatar_and_end_date():
     assert v.profiles[0].avatar.startswith("data:image/") and v.giftcards[0].end_date == "2026-12-31"
     d["giftcards"][0]["end_date"] = None
     assert validate_phone_vault(d).giftcards[0].end_date is None
+
+
+# ---------------------------------------------------------------- appairage (Ruling 21)
+def test_known_device_with_valid_proof_skips_code_and_gets_pc_proof(env):
+    r = env.flow().handle(hello_msg(env))
+    assert r["need_code"] is False and r["code_version"] == env.store.code_version()
+    assert r["proof_pc"] == proof(PAIR, b"pp-pc-hello")
+    assert PAIR not in json.dumps(r)
+
+
+@pytest.mark.parametrize("bad", [None, "", "xx", proof(PAIR, b"pp-pc-hello"), proof(PAIR, b"pp-phone-hello", bytes(32)),
+                                 proof(b64u(bytes(32)), b"pp-phone-hello")])
+def test_missing_or_wrong_proof_needs_code(env, bad):
+    msg = hello_msg(env, proof=bad)
+    if bad is None:
+        msg.pop("proof")
+    r = env.flow().handle(msg)
+    assert r["ok"] is True and r["need_code"] is True
+    assert "code_version" not in r and "proof_pc" not in r
+
+
+@pytest.mark.parametrize("bad", [5, ["x"], {"a": 1}])
+def test_proof_must_be_a_string(env, bad):
+    assert env.flow().handle(hello_msg(env, proof=bad))["error"] == "invalid"
+
+
+def test_device_without_pair_needs_code_then_gets_one(env):
+    del env.store.vault.sync["devices"]["dev1"]["pair"]  # téléphone d'avant l'appairage
+    flow = env.flow()
+    r = flow.handle(hello_msg(env))
+    assert r["need_code"] is True and "proof_pc" not in r
+    r = flow.handle(sync_msg(code=CODE))
+    assert r["ok"] is True
+    pair = r["pair"]
+    assert isinstance(pair, str) and len(unb64u(pair)) == 32
+    assert VaultStore(env.store.path).load(CODE).sync["devices"]["dev1"]["pair"] == pair
+    # la synchro suivante (nouveau QR, nouvelle clé) se fait sans code avec la nouvelle preuve
+    key2 = bytes(range(1, 33))
+    flow2 = SyncFlow(env.store, env.lockout, env.persist, lambda: env.config, "PC-Jules", now=lambda: env.now,
+                     qr_key=key2)
+    r = flow2.handle(hello_msg(env, last_sync=iso(NOW), proof=proof(pair, b"pp-phone-hello", key2)))
+    assert r["need_code"] is False and r["proof_pc"] == proof(pair, b"pp-pc-hello", key2)
+
+
+def test_code_verified_sync_issues_fresh_pair(env):
+    flow = env.flow()
+    r = flow.handle(hello_msg(env, code_version="ancien"))  # code changé : preuve valide mais code exigé
+    assert r["need_code"] is True and r["proof_pc"] == proof(PAIR, b"pp-pc-hello")
+    r = flow.handle(sync_msg(code=CODE))
+    assert r["ok"] is True and r["pair"] != PAIR and len(unb64u(r["pair"])) == 32
+    assert VaultStore(env.store.path).load(CODE).sync["devices"]["dev1"]["pair"] == r["pair"]
+
+
+def test_first_sync_issues_pair(env):
+    flow = env.flow()
+    flow.handle(hello_msg(device_id="neuf", code_version=None, has_data=False, last_sync=None, generation=None))
+    r = flow.handle({k: v for k, v in sync_msg(device_id="neuf", replace=True, code=CODE, last_sync=None).items()
+                     if k != "vault"})
+    assert r["ok"] is True and len(unb64u(r["pair"])) == 32
+    assert VaultStore(env.store.path).load(CODE).sync["devices"]["neuf"]["pair"] == r["pair"]
+
+
+def test_restore_needs_code_even_with_valid_proof_then_new_pair(env):
+    env.config["generation"] = "gen-restored"
+    flow = env.flow()
+    r = flow.handle(hello_msg(env))
+    assert r["need_code"] is True and r["mode"] == "replace" and r["proof_pc"] == proof(PAIR, b"pp-pc-hello")
+    r = flow.handle(sync_msg(replace=True, code=CODE))
+    assert r["ok"] is True and r["pair"] != PAIR
+
+
+def test_unknown_device_with_proof_of_other_device_needs_code(env):
+    r = env.flow().handle(hello_msg(env, device_id="autre"))
+    assert r["need_code"] is True and "proof_pc" not in r
+
+
+def test_pc_without_qr_key_never_skips_code(env):
+    flow = SyncFlow(env.store, env.lockout, env.persist, lambda: env.config, "PC-Jules", now=lambda: env.now,
+                    qr_key=b"")
+    r = flow.handle(hello_msg(env))
+    assert r["need_code"] is True and "proof_pc" not in r

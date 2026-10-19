@@ -217,7 +217,7 @@ def test_sync_stop(env):
 
 def test_list_and_forget_device(env):
     v = env.api._store.vault
-    v.sync["devices"]["a"] = {"name": "Vieux", "last_sync": "2026-01-01T10:00:00"}
+    v.sync["devices"]["a"] = {"name": "Vieux", "last_sync": "2026-01-01T10:00:00", "pair": "secret-a"}
     v.sync["devices"]["b"] = {"name": "Récent", "last_sync": "2026-10-18T09:00:00"}
     env.api._save()
     assert env.api.list_devices() == [
@@ -229,6 +229,7 @@ def test_list_and_forget_device(env):
     env.api.lock()
     env.api.unlock(CODE)
     assert [d["id"] for d in env.api.list_devices()] == ["b"]  # enregistré
+    assert "a" not in env.api._store.vault.sync["devices"]  # secret d'appairage effacé avec l'appareil
     assert env.api.forget_device("inconnu") == {}
 
 

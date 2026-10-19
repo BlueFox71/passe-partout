@@ -10,6 +10,7 @@ from app import api as api_mod
 from app.api import Api
 from app.store import VaultStore
 from app.sync import AAD_REQ, AAD_RESP, SyncServer, open_sealed, seal, unb64u
+from app.syncflow import PROOF_PC, PROOF_PHONE, pair_proof
 
 CODE = "123456"
 NEW_CODE = "987654"
@@ -39,6 +40,7 @@ class Phone:
         self.pc, self.device_id, self.name = pc, device_id, name
         self.meta = {"generation": None, "last_sync": None, "code_version": None}
         self.vault = None
+        self.pair = None  # secret d'appairage reçu à la 1re synchro avec code (Ruling 21)
 
     def _post(self, msg):
         p = self.pc.qr[-1]
@@ -54,8 +56,16 @@ class Phone:
             return {"http": None}  # serveur arrêté
 
     def hello(self):
-        return self._post({"type": "hello", "device_id": self.device_id, "device_name": self.name, **self.meta,
-                           "has_data": self.vault is not None, "now": _iso(datetime.now())})
+        msg = {"type": "hello", "device_id": self.device_id, "device_name": self.name, **self.meta,
+               "has_data": self.vault is not None, "now": _iso(datetime.now())}
+        key = unb64u(self.pc.qr[-1]["key"])
+        if self.pair:
+            msg["proof"] = pair_proof(self.pair, key, PROOF_PHONE)
+        h = self._post(msg)
+        if self.pair and h.get("ok"):
+            # le téléphone appairé refuse un PC qui ne prouve pas détenir le secret
+            assert h.get("proof_pc") == pair_proof(self.pair, key, PROOF_PC), h
+        return h
 
     def sync(self, code=None):
         """Scanne un nouveau QR (sync_start) puis hello + sync ; renvoie (réponse hello, réponse sync)."""
@@ -70,6 +80,7 @@ class Phone:
                 msg["vault"] = {k: self.vault[k] for k in _VAULT_KEYS}
             r = self._post(msg)
             if r.get("ok"):
+                self.pair = r.get("pair") or self.pair
                 self.vault = r["vault"]
                 self.meta = {"generation": r["generation"], "last_sync": r["synced_at"],
                              "code_version": r["code_version"]}
@@ -159,21 +170,32 @@ def test_sync_end_to_end(pc):
     api.restore_backup(api.list_backups()[0]["name"])
     if api.get_state()["locked"]:
         assert api.unlock(NEW_CODE)["ok"]
+    # le registre restauré date d'avant le ré-appairage de l'étape 4 : son secret est l'ancien, le PC ne
+    # prouve plus rien et le téléphone refuse ; « Ré-appairer » (secret local oublié) puis code
+    with pytest.raises(AssertionError):
+        phone.sync()
+    old_pair, phone.pair = phone.pair, None
     h, r = phone.sync()
     assert h["mode"] == "replace" and h["reason"] == "restored" and h["need_code"] is True
     assert r["error"] == "code_required"
     h, r = phone.sync(NEW_CODE)
-    assert r["ok"] and r["generation"] != old_generation
+    assert r["ok"] and r["generation"] != old_generation and r["pair"] != old_pair  # nouveau secret
     assert phone.vault["accounts"] == [dict(a) for a in r["vault"]["accounts"]]
     h, r = phone.sync()
     assert h["mode"] == "merge" and h["need_code"] is False
 
-    # 6. téléphone oublié → code redemandé
+    # 6. téléphone oublié → secret effacé sur le PC : le PC ne prouve plus rien, le téléphone refuse ;
+    # « Ré-appairer » (secret local oublié) → code redemandé, nouveau secret
     api.forget_device("dev-a")
+    with pytest.raises(AssertionError):
+        phone.sync()
+    phone.pair = None
     h, r = phone.sync()
-    assert h["need_code"] is True and r["error"] == "code_required"
+    assert h["need_code"] is True and "proof_pc" not in h and r["error"] == "code_required"
     h, r = phone.sync(NEW_CODE)
-    assert r["ok"]
+    assert r["ok"] and r["pair"]
+    h, r = phone.sync()
+    assert h["need_code"] is False and "pair" not in r
 
     # 7. deuxième téléphone : première synchro avec code, il reçoit la modification du premier
     phone_b = Phone(pc, "dev-b", "Pixel B")
@@ -181,6 +203,18 @@ def test_sync_end_to_end(pc):
     assert r["ok"] and h["reason"] == "first"
     assert {d["id"] for d in api.list_devices()} == {"dev-a", "dev-b"}
     assert [a["name"] for a in phone_b.vault["accounts"]] == [a["name"] for a in phone.vault["accounts"]]
+
+
+def test_device_id_alone_no_longer_skips_code(pc):
+    """Ruling 21 : un faux téléphone qui a récolté le device_id (envoyé à tout QR) n'évite pas le code."""
+    phone = Phone(pc, "dev-a", "Pixel A")
+    h, r = phone.sync(CODE)
+    assert r["ok"]
+    thief = Phone(pc, "dev-a", "Voleur")
+    thief.meta, thief.vault = dict(phone.meta), phone.vault
+    h, r = thief.sync()
+    assert h["need_code"] is True and "code_version" not in h and "proof_pc" not in h
+    assert r["error"] == "code_required" and "vault" not in r
 
 
 def test_session_is_single_use_over_http(pc):

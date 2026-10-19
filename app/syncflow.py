@@ -6,7 +6,10 @@ forme {"ok": False, "error": <code>, "message": <texte>} ; aucun code ni mot de 
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import math
+import os
 from datetime import date, datetime, timedelta
 from typing import Callable
 
@@ -14,10 +17,15 @@ from app.lockout import Lockout
 from app.merge import TOMBSTONE_DAYS, merge
 from app.model import Vault
 from app.store import VaultStore
+from app.sync import b64u, unb64u
 
 MAX_SKEW_SECONDS = 300
 DEVICE_NAME_MAX = 60
 DEFAULT_DEVICE_NAME = "Téléphone"
+PAIR_BYTES = 32
+# Appairage (Ruling 21) : preuves HMAC-SHA256(secret de l'appareil, clé du QR ‖ étiquette), en base64url
+PROOF_PHONE = b"pp-phone-hello"
+PROOF_PC = b"pp-pc-hello"
 
 _MESSAGES = {
     "no_lock": "Définis d'abord un code (PIN ou mot de passe) sur le PC pour synchroniser le téléphone.",
@@ -192,16 +200,29 @@ def validate_phone_vault(d: dict) -> Vault:
         raise ValueError("Coffre du téléphone invalide") from e
 
 
+def pair_proof(pair: str, qr_key: bytes, label: bytes) -> str | None:
+    """Preuve d'appairage pour cette session ; None si le secret enregistré est illisible."""
+    try:
+        secret = unb64u(pair)
+    except (ValueError, TypeError):
+        return None
+    if len(secret) != PAIR_BYTES or not qr_key:
+        return None
+    return b64u(hmac.new(secret, qr_key + label, hashlib.sha256).digest())
+
+
 # ---------------------------------------------------------------- dialogue
 class SyncFlow:
     def __init__(self, store: VaultStore, lockout: Lockout, persist_lockout: Callable[[], None],
-                 config: Callable[[], dict], pc_name: str, now: Callable[[], datetime] = datetime.now):
+                 config: Callable[[], dict], pc_name: str, now: Callable[[], datetime] = datetime.now, *,
+                 qr_key: bytes):
         self._store = store
         self._lockout = lockout
         self._persist_lockout = persist_lockout
         self._config = config
         self._pc_name = pc_name
         self._now = now
+        self._qr_key = bytes(qr_key or b"")  # clé du QR de cette session : les preuves d'appairage y sont liées
         self._hello: dict | None = None  # résultat du hello : device_id, need_code, mode
         self.device_name: str | None = None
         self.summary: dict | None = None
@@ -272,16 +293,23 @@ class SyncFlow:
         has_data = msg.get("has_data")
         if not isinstance(has_data, bool):
             _invalid("has_data")
+        phone_proof = _str(msg, "proof", optional=True)
         now = self._check_clock(msg)
         self._check_store()
 
-        # appareil inconnu (jamais vu ou « oublié »), code changé sur le PC ou coffre PC remplacé (restauration
-        # d'une sauvegarde, config perdue : nouvelle génération) → le code est exigé. La génération compte car
-        # une restauration ramène aussi l'ancien registre des appareils (un téléphone oublié y redevient connu).
-        known = device_id in self._store.vault.sync.get("devices", {})
+        # appareil inconnu (jamais vu ou « oublié »), sans preuve d'appairage valide (le device_id seul n'est
+        # pas un secret : il est envoyé à quiconque montre un QR), code changé sur le PC ou coffre PC remplacé
+        # (restauration d'une sauvegarde, config perdue : nouvelle génération) → le code est exigé. La
+        # génération compte car une restauration ramène aussi l'ancien registre des appareils.
+        entry = self._store.vault.sync.get("devices", {}).get(device_id)
+        pair = entry.get("pair") if isinstance(entry, dict) else None
+        proven = False
+        if isinstance(pair, str) and phone_proof:
+            expected = pair_proof(pair, self._qr_key, PROOF_PHONE)
+            proven = expected is not None and hmac.compare_digest(expected.encode(), phone_proof.encode())
         pc_generation = self._generation()
         same_generation = pc_generation is not None and generation == pc_generation
-        need_code = not known or code_version != self._store.code_version() or not same_generation
+        need_code = not proven or code_version != self._store.code_version() or not same_generation
         if not has_data:
             mode, reason = "replace", "first"
         elif not same_generation:
@@ -295,6 +323,9 @@ class SyncFlow:
         lock_mode, pin_length = self._lock_info()
         reply = {"ok": True, "pc": self._pc_name, "lock_mode": lock_mode, "pin_length": pin_length,
                  "need_code": need_code, "mode": mode, "reason": reason, "since": last_sync}
+        if proven:
+            # le téléphone vérifie que ce PC détient aussi le secret avant d'envoyer son coffre ou un code
+            reply["proof_pc"] = pair_proof(pair, self._qr_key, PROOF_PC)
         if not need_code:
             # sinon la version du code n'est donnée qu'après vérification du code (réponse de sync)
             reply["code_version"] = self._store.code_version()
@@ -345,7 +376,15 @@ class SyncFlow:
             vault = result.vault
             summary = {"to_pc": result.to_pc, "to_phone": result.to_phone, "deleted": result.deleted,
                        "conflicts": result.conflicts}
-        vault.sync.setdefault("devices", {})[device_id] = {"name": device_name, "last_sync": synced_at}
+        # secret d'appairage : nouveau après chaque vérification du code (1re synchro, code changé, restauration,
+        # téléphone oublié ou d'avant l'appairage), sinon celui du registre
+        old = pc_vault.sync.get("devices", {}).get(device_id)
+        new_pair = b64u(os.urandom(PAIR_BYTES)) if hello["need_code"] else None
+        pair = new_pair or (old.get("pair") if isinstance(old, dict) else None)
+        entry = {"name": device_name, "last_sync": synced_at}
+        if isinstance(pair, str):
+            entry["pair"] = pair
+        vault.sync.setdefault("devices", {})[device_id] = entry
         # sauvegarde automatique seulement si les données du PC changent : sinon seul le registre des
         # appareils change, et des synchros sans effet ne doivent pas évincer les points de restauration
         changed = not replace and summary["to_pc"] > 0
@@ -361,6 +400,9 @@ class SyncFlow:
         out.pop("settings", None)
         out.pop("sync", None)
         lock_mode, pin_length = self._lock_info()
-        return {"ok": True, "vault": out, "summary": summary, "code_version": self._store.code_version(),
-                "generation": self._generation(), "synced_at": synced_at, "lock_mode": lock_mode,
-                "pin_length": pin_length}
+        reply = {"ok": True, "vault": out, "summary": summary, "code_version": self._store.code_version(),
+                 "generation": self._generation(), "synced_at": synced_at, "lock_mode": lock_mode,
+                 "pin_length": pin_length}
+        if new_pair:
+            reply["pair"] = new_pair  # donné une seule fois ; le téléphone le garde chiffré
+        return reply

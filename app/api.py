@@ -656,7 +656,8 @@ class Api:
 
         pc_name = os.environ.get("COMPUTERNAME") or socket.gethostname()
         key = os.urandom(32)
-        flow = SyncFlow(self._store, self._lockout, self._persist_lockout, lambda: self._config, pc_name)
+        flow = SyncFlow(self._store, self._lockout, self._persist_lockout, lambda: self._config, pc_name,
+                        qr_key=key)
         run = _SyncRun(flow, self._clock() + SYNC_SECONDS)
         run.session = SyncSession(key, lambda msg: self._on_sync_message(run, msg), run.deadline, self._clock)
         run.server = self._sync_server(run.session)
