@@ -444,10 +444,26 @@ public class PassePartoutPlugin extends Plugin {
     private static final String APK_FILE = "passe-partout-update.apk";
     private static final String APK_MIME = "application/vnd.android.package-archive";
 
+    // Au chargement : plus aucune mise à jour en attente (installée, annulée ou abandonnée) : ~11 Mo libérés.
+    @Override
+    public void load() {
+        clearApkCache();
+    }
+
+    private void clearApkCache() {
+        File[] old = new File(getContext().getCacheDir(), APK_DIR).listFiles();
+        if (old != null) {
+            for (File f : old) f.delete();
+        }
+    }
+
     @PluginMethod
     public void installApk(PluginCall call) {
         try {
             byte[] apk = decodeB64(call.getString("data"), "FAILED", "Mise à jour illisible.");
+            // ~15 Mo : retirés de l'appel, que Capacitor garde (savedCalls) et écrit dans l'état sauvegardé de
+            // l'activité pendant l'écran lancé (Bridge/Plugin.saveInstanceState) → TransactionTooLargeException
+            call.getData().remove("data");
             if (apk.length == 0) throw new NativeError("FAILED", "Mise à jour illisible.");
             Context ctx = getContext();
             if (!ctx.getPackageManager().canRequestPackageInstalls()) {
@@ -457,10 +473,7 @@ public class PassePartoutPlugin extends Plugin {
                 return;
             }
             File dir = new File(ctx.getCacheDir(), APK_DIR);
-            File[] old = dir.listFiles();
-            if (old != null) {
-                for (File f : old) f.delete(); // anciennes mises à jour
-            }
+            clearApkCache(); // anciennes mises à jour
             if (!dir.isDirectory() && !dir.mkdirs()) throw new NativeError("FAILED", "Espace de stockage indisponible.");
             File file = new File(dir, APK_FILE);
             try (OutputStream out = new FileOutputStream(file)) {
@@ -487,6 +500,7 @@ public class PassePartoutPlugin extends Plugin {
                 startActivityForResult(call, intent, callback);
             } catch (Exception e) {
                 call.reject("Installation de la mise à jour impossible.", "FAILED");
+                getBridge().releaseCall(call);
             }
         });
     }
@@ -495,11 +509,13 @@ public class PassePartoutPlugin extends Plugin {
     private void installPermissionResult(PluginCall call, ActivityResult result) {
         if (call == null) return;
         call.reject("Autorise Passe-Partout à installer des applis, puis réessaie.", "INSTALL_PERMISSION");
+        getBridge().releaseCall(call); // gardé par startActivityForResult
     }
 
     @ActivityCallback
     private void installResult(PluginCall call, ActivityResult result) {
         if (call == null) return;
         call.resolve(); // installateur refermé (mise à jour annulée ou échouée ; installée : l'appli redémarre)
+        getBridge().releaseCall(call);
     }
 }

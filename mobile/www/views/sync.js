@@ -194,6 +194,12 @@
         if (!live()) return abandon();
         return updateScreen(client, e.details);
       }
+      if (e && e.code === "pc_outdated") {
+        pending = client;
+        abandon(); // session terminée : le PC ne synchronisera pas ce téléphone
+        if (live()) startScreen(e.message);
+        return;
+      }
       if (e && e.code === "unpaired") {
         pending = client; // si c'est bien le PC, sa session est annulée en quittant cet écran
         if (!live()) return abandon();
