@@ -291,6 +291,7 @@
         }
         if (!sheetLive()) return;
         current = saved;
+        hideSecrets(); // code et PIN remasqués : la carte a servi, ils n'ont plus à rester à l'écran
         PP.toast(`Nouveau solde : ${PP.money(saved.remaining)}`);
         drawDetail();
         load(token);

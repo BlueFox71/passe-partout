@@ -171,6 +171,7 @@
         render();
         return;
       }
+      if (r.error === "bio_lockout") err.textContent = "Trop d'essais d'empreinte : utilise le code.";
       if (r.error === "native") err.textContent = NATIVE_MSG;
       // « canceled » : on reste sur l'écran, le bouton permet de réessayer
     };

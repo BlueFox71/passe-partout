@@ -160,11 +160,16 @@
   };
 
   // ---------------------------------------------------------------- arrière-plan
+  // Ruling 23 : un écran natif lancé par l'appli (scanner, demande de permission, invite d'empreinte) met la
+  // WebView en pause sans que l'utilisateur ait quitté l'appli : ce temps ne compte pas.
   let pausedAt = null;
-  if (typeof native.onPause === "function") native.onPause(() => { pausedAt = Date.now(); });
+  const inNativeScreen = () => typeof native.inNativeScreen === "function" && native.inNativeScreen();
+  if (typeof native.onPause === "function") {
+    native.onPause(() => { pausedAt = inNativeScreen() ? null : Date.now(); });
+  }
   if (typeof native.onResume === "function") {
     native.onResume(() => {
-      const away = pausedAt == null ? 0 : Date.now() - pausedAt;
+      const away = pausedAt == null || inNativeScreen() ? 0 : Date.now() - pausedAt;
       pausedAt = null;
       const st = PP.state;
       if (away > BACKGROUND_LOCK_MS && st.has_data && !st.locked) PP.lockNow().catch(() => {});
@@ -172,10 +177,19 @@
   }
 
   // ---------------------------------------------------------------- bouton retour (Android)
-  // Fenêtre, fiche ou formulaire ouvert → fermé ; autre onglet → Comptes ; sinon (vrai renvoyé par
-  // personne) le natif met l'appli en arrière-plan.
+  // Synchro en cours d'envoi → ignoré (Ruling 22) ; synchro plein écran (accueil, données illisibles) →
+  // retour à cet écran ; fenêtre, fiche ou formulaire ouvert → fermé ; autre onglet → Comptes ; sinon
+  // (vrai renvoyé par personne) le natif met l'appli en arrière-plan.
   if (typeof native.onBack === "function") {
     native.onBack(() => {
+      const sync = PP.views.sync;
+      if (sync && sync.busy && sync.busy()) return true;
+      if (sync && sync.fullscreen && sync.fullscreen()) {
+        if (PP.modal.isOpen()) PP.modal.close();
+        sync.clear(); // annule un hello ou une saisie de code en cours
+        PP.route().catch(() => {});
+        return true;
+      }
       if (PP.mui && PP.mui.closeTop()) return true;
       const shell = PP.views.shell;
       if (shell && shell.active() && shell.tab() !== "accounts") {

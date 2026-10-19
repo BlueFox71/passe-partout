@@ -253,8 +253,11 @@ body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
 .m-form input[type="date"] { color-scheme: dark; }
 
 /* ---------- éléments partagés adaptés au téléphone ---------- */
-#toasts { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px); width: calc(100% - 32px); }
-.toast { max-width: 100%; text-align: center; }
+/* les toasts ne captent jamais les touchers (boutons dessous toujours utilisables) ; fiche ou formulaire
+   ouvert : en haut, pour ne pas cacher ses boutons du bas (Modifier, Supprimer, Enregistrer) */
+#toasts { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px); width: calc(100% - 32px); pointer-events: none; }
+.toast { max-width: 100%; text-align: center; pointer-events: none; }
+body:has(.m-sheet:not([hidden])) #toasts { top: calc(var(--safe-top) + 64px); bottom: auto; }
 .modal, .modal.sm, .modal.wide { width: 100%; max-width: calc(100% - 24px); padding: 20px 16px; }
 .modal-foot { flex-wrap: wrap; }
 .modal-foot .btn { min-height: 44px; justify-content: center; }

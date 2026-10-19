@@ -33,13 +33,23 @@
     mounted = true;
     app.querySelectorAll("[data-tab]").forEach((b) =>
       b.addEventListener("click", () => {
+        if (syncBusy()) return; // Ruling 22 : pas de changement d'onglet pendant l'envoi de la synchro
         if (b.dataset.tab !== V.tab()) V.show(b.dataset.tab);
       })
     );
     renderTab(current);
   };
 
+  const syncBusy = () => !!(PP.views.sync && PP.views.sync.busy && PP.views.sync.busy());
+
+  // Barre d'onglets grisée pendant l'envoi de la synchro (appelé par views/sync.js).
+  V.setLocked = (on) => {
+    document.querySelectorAll(".m-tabs .m-tab").forEach((b) => { b.disabled = !!on; });
+  };
+
   function renderTab(id) {
+    // quitter l'onglet Synchro : hello ou saisie du code en cours annulés (cancel envoyé au PC)
+    if (id !== "sync" && PP.views.sync && typeof PP.views.sync.clear === "function") PP.views.sync.clear();
     const body = V.body();
     const view = PP.views[id];
     if (view && typeof view.show === "function") {

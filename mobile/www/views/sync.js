@@ -2,7 +2,10 @@
    sync, enregistrement (apply_sync) puis résumé.
    Contrat (décision 14) : V.show(container?) — sans conteneur, plein écran (accueil, données illisibles :
    l'appli n'est pas déverrouillée et n'a pas de données) ; avec un conteneur, dans l'onglet Synchro.
-   Le code saisi n'est jamais journalisé ni gardé après l'échange. */
+   Le code saisi n'est jamais journalisé ni gardé après l'échange.
+   Appairage (Ruling 21) : un téléphone appairé refuse un PC qui ne prouve pas le secret commun, avant
+   d'envoyer code ou coffre (« Ré-appairer » oublie le secret local). Pendant l'envoi de la synchro, onglets
+   et bouton Retour sont bloqués (Ruling 22). */
 (function () {
   const V = (PP.views.sync = {});
   const PPM = window.PPM;
@@ -13,6 +16,10 @@
   let seq = 0; // jeton d'affichage : une étape lancée par un écran remplacé s'arrête
   let pending = null; // client dont le hello a réussi mais sans sync aboutie (à annuler si on quitte)
   let waitTimer = null;
+  let inFlight = false; // requête sync envoyée, réponse pas encore enregistrée
+  let screen = null; // élément affiché
+
+  const MODIFIED = "Modifié pendant la synchro : relance la synchronisation.";
 
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
   const esc = (s) => PP.esc(String(s ?? ""));
@@ -49,9 +56,19 @@
     } else {
       el = PP.render(`<div class="m-screen m-sync">${PP.brand("big-brand")}${html}</div>`).firstElementChild;
     }
+    screen = el;
     const live = () => token === seq && el.isConnected;
     return { el, live };
   }
+
+  function setInFlight(on) {
+    inFlight = on;
+    if (PP.views.shell && PP.views.shell.setLocked) PP.views.shell.setLocked(on);
+  }
+
+  V.busy = () => inFlight;
+  // Vue plein écran affichée (accueil, données illisibles) : le bouton Retour y revient.
+  V.fullscreen = () => !container && !!screen && screen.isConnected;
 
   V.show = (target) => {
     abandon();
@@ -66,12 +83,13 @@
   };
 
   // ------------------------------------------------------------ écran de départ
-  function startScreen(error = "") {
+  function startScreen(error = "", note = "") {
     const { el, live } = paint(`
       <h2>Synchroniser avec le PC</h2>
       <p>Sur le PC : Passe-Partout → « Synchroniser le téléphone », puis vise le QR code.</p>
       <div class="hint" id="last"></div>
       ${error ? `<div class="warn-box" id="err">${esc(error)}</div>` : ""}
+      ${note ? `<div class="hint" id="note">${esc(note)}</div>` : ""}
       <button type="button" class="btn btn-primary m-wide" id="scan">${PP.icon.sync}Scanner le QR code du PC</button>
       ${container ? "" : `<button type="button" class="m-link" id="back">Retour</button>`}`);
     el.querySelector("#scan").addEventListener("click", () => scan());
@@ -114,8 +132,14 @@
     let hello;
     try {
       info = await PP.api.sync_info();
-      hello = await client.hello(info);
+      const pair = await PP.api.sync_pair(); // jamais envoyé : seule sa preuve part dans le hello
+      hello = await client.hello(info, { pair });
     } catch (e) {
+      if (e && e.code === "unpaired") {
+        pending = client; // si c'est bien le PC, sa session est annulée en quittant cet écran
+        if (!live()) return abandon();
+        return unpairedScreen(e.message);
+      }
       if (live()) startScreen(e.code ? e.message : "Synchronisation impossible.");
       return;
     }
@@ -148,10 +172,21 @@
   // `cur` : vrai tant que l'écran appelant est affiché. Renvoie l'erreur du PC à montrer sur l'écran du
   // code (code faux ou manquant : seul « sync » sera renvoyé), sinon null (résumé ou autre écran affiché).
   async function runSync(ctx, code, cur) {
+    setInFlight(true);
+    try {
+      return await sendAndApply(ctx, code, cur);
+    } finally {
+      setInFlight(false);
+    }
+  }
+
+  async function sendAndApply(ctx, code, cur) {
     const { client, info, hello } = ctx;
     let reply;
     try {
-      const vault = hello.mode === "merge" ? await PP.api.sync_payload() : null;
+      // toujours demandé : il note la révision du coffre, que apply_sync compare (Ruling 22)
+      const payload = await PP.api.sync_payload();
+      const vault = hello.mode === "merge" ? payload : null;
       const now = (await PP.api.sync_info()).now; // heure fraîche : la saisie du code a pu durer
       reply = await client.sync(PPM.syncMessage(info, hello, { vault, code, now }));
     } catch (e) {
@@ -166,10 +201,16 @@
       return null;
     }
     pending = null; // session terminée côté PC
+    let applied;
     try {
-      await PP.call("apply_sync", { ...reply, pc: hello.pc }, code);
+      applied = await PP.call("apply_sync", { ...reply, pc: hello.pc }, code);
     } catch (e) {
       if (cur()) startScreen("Les données reçues n'ont pas pu être enregistrées sur le téléphone : relance la synchronisation.");
+      return null;
+    }
+    if (applied && applied.error === "modified") {
+      // coffre modifié pendant l'échange : rien n'a été remplacé, la modification partira au prochain essai
+      if (cur()) startScreen(MODIFIED);
       return null;
     }
     try {
@@ -177,6 +218,34 @@
     } catch (e) { /* état relu plus tard par PP.route */ }
     if (cur()) summaryScreen(hello.pc, reply.summary || {});
     return null;
+  }
+
+  // ------------------------------------------------------------ PC non reconnu (Ruling 21)
+  function unpairedScreen(message) {
+    const { el, live } = paint(`
+      <h2>PC non reconnu</h2>
+      <div class="warn-box">${esc(message)}</div>
+      <button type="button" class="btn btn-primary m-wide" id="repair">Ré-appairer</button>
+      <button type="button" class="m-link" id="cancel">Annuler</button>`);
+    el.querySelector("#cancel").addEventListener("click", () => {
+      abandon();
+      startScreen();
+    });
+    const repair = el.querySelector("#repair");
+    repair.addEventListener("click", async () => {
+      repair.disabled = true;
+      abandon(); // la session de ce QR a déjà servi : il en faut un nouveau
+      try {
+        await PP.call("forget_pair");
+      } catch (e) {
+        if (live()) repair.disabled = false;
+        return;
+      }
+      if (live()) {
+        startScreen("", "Appairage effacé. Relance « Synchroniser le téléphone » sur le PC puis scanne le nouveau "
+          + "QR code : le code du PC te sera demandé.");
+      }
+    });
   }
 
   // ------------------------------------------------------------ code du PC
