@@ -8,7 +8,7 @@ Set-Location $racine
 $py = Join-Path $racine ".venv\Scripts\python.exe"
 $env:PYTHONUTF8 = "1"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
 
 function Stop-Release($message) { Write-Host "ERREUR : $message" -ForegroundColor Red; exit 1 }
 function Etape($texte) { Write-Host "==> $texte" -ForegroundColor Cyan }
@@ -29,14 +29,25 @@ $branche = (& git rev-parse --abbrev-ref HEAD).Trim()
 if ($branche -ne "main") { Verifier "la publication se fait depuis main (branche actuelle : $branche)." }
 $sale = & git status --porcelain
 if ($sale) { Verifier "l'arbre de travail n'est pas propre :`n$($sale -join "`n")" }
+if (-not $DryRun) {
+    & git fetch origin main
+    if ($LASTEXITCODE -ne 0) { Stop-Release "git fetch a échoué : impossible de comparer avec origin/main." }
+    if ((& git rev-parse HEAD) -ne (& git rev-parse origin/main)) {
+        Stop-Release "main local n'est pas identique à origin/main : synchronise (pull ou push) puis relance."
+    }
+}
 
 Etape "Fichiers sensibles suivis par git"
-$sensibles = (& git ls-files) | & $py (Join-Path $racine "tools\release.py") sensitive
+$sensibles = (& git -c core.quotepath=off ls-files) | & $py (Join-Path $racine "tools\release.py") sensitive
 if ($LASTEXITCODE -ne 0) { Stop-Release "fichiers sensibles suivis par git :`n$($sensibles -join "`n")" }
 
 Etape "Notes de version"
 & $py (Join-Path $racine "tools\release.py") check-notes $version (Join-Path $racine "RELEASE_NOTES.md")
 if ($LASTEXITCODE -ne 0) { Stop-Release "RELEASE_NOTES.md invalide (voir ci-dessus)." }
+
+if (-not $env:GH_TOKEN) {
+    Verifier "Définis GH_TOKEN (jeton GitHub en écriture sur passe-partout) puis relance."
+}
 
 Etape "Tag"
 if (& git tag --list $tag) { Stop-Release "le tag $tag existe déjà en local." }
@@ -65,10 +76,6 @@ if ($LASTEXITCODE -ne 0) { Stop-Release "la construction de l'exe a échoué." }
 $exe = Join-Path $racine "dist\Passe-Partout-$version.exe"
 if (-not (Test-Path $exe)) { Stop-Release "exe introuvable : $exe" }
 
-if (-not $env:GH_TOKEN) {
-    Verifier "Définis GH_TOKEN (jeton GitHub en écriture sur passe-partout) puis relance."
-}
-
 if ($DryRun) {
     Write-Host "[simulation] git tag $tag ; git push origin $tag"
     & $py (Join-Path $racine "tools\release.py") publish $version $exe --dry-run
@@ -81,8 +88,8 @@ Etape "Tag $tag"
 & git tag $tag
 if ($LASTEXITCODE -ne 0) { Stop-Release "git tag a échoué." }
 & git push origin $tag
-if ($LASTEXITCODE -ne 0) { Stop-Release "git push du tag a échoué (le tag local $tag existe : git tag -d $tag pour le retirer)." }
+if ($LASTEXITCODE -ne 0) { Stop-Release "git push du tag a échoué. Retire le tag local (git tag -d $tag) puis relance." }
 Etape "Release GitHub"
 & $py (Join-Path $racine "tools\release.py") publish $version $exe
-if ($LASTEXITCODE -ne 0) { Stop-Release "la publication a échoué (le tag $tag est déjà poussé)." }
+if ($LASTEXITCODE -ne 0) { Stop-Release "la publication a échoué ; le tag $tag est déjà poussé. Pour relancer : git push --delete origin $tag ; git tag -d $tag ; puis release.ps1 (vérifie aussi sur GitHub qu'aucun brouillon $tag ne reste)." }
 Write-Host "Version $version publiée." -ForegroundColor Green

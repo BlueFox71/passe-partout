@@ -82,13 +82,24 @@ def publish(version, exe_path, notes, token, repo=REPO, dry_run=False):
     existing = _request(f"{api}/releases?per_page=100", token) or []
     if any(r.get("tag_name") == tag for r in existing):
         raise RuntimeError(f"La release {tag} existe déjà sur {repo} : rien n'est écrasé. Monte la version.")
+    # Brouillon d'abord : la release n'est visible qu'une fois l'exe téléversé.
     release = _request(
         f"{api}/releases", token, "POST",
-        json.dumps({"tag_name": tag, "name": version, "body": notes, "draft": False, "prerelease": False}).encode("utf-8"),
+        json.dumps({"tag_name": tag, "name": version, "body": notes, "draft": True, "prerelease": False}).encode("utf-8"),
         "application/json",
     )
-    url = f"https://uploads.github.com/repos/{repo}/releases/{release['id']}/assets?name={exe_path.name}"
-    _request(url, token, "POST", exe_path.read_bytes(), "application/octet-stream")
+    rid = release["id"]
+    url = f"https://uploads.github.com/repos/{repo}/releases/{rid}/assets?name={exe_path.name}"
+    try:
+        _request(url, token, "POST", exe_path.read_bytes(), "application/octet-stream")
+        _request(f"{api}/releases/{rid}", token, "PATCH", json.dumps({"draft": False}).encode("utf-8"), "application/json")
+    except RuntimeError as e:
+        try:
+            _request(f"{api}/releases/{rid}", token, "DELETE")
+            nettoye = f"Le brouillon de la release {tag} a été supprimé ; relance après avoir retiré le tag (git push --delete origin {tag} ; git tag -d {tag})."
+        except RuntimeError:
+            nettoye = f"Supprime à la main le brouillon de la release {tag} sur GitHub, puis retire le tag (git push --delete origin {tag} ; git tag -d {tag})."
+        raise RuntimeError(f"{e} {nettoye}") from None
     print(f"Release {tag} publiée sur {repo} avec {exe_path.name}.")
 
 
