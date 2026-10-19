@@ -24,7 +24,7 @@
 - Les réglages (`settings`) et le registre `sync` ne sont jamais envoyés au téléphone.
 
 **Écarts assumés par rapport au spec** (à signaler à Jules dans le résumé final) :
-- `generation` est stocké dans `config.json` (PC) et non dans le coffre : restaurer une sauvegarde remet aussi l'ancien coffre, donc un compteur dans le coffre reculerait. Le téléphone compare par `!=`.
+- `generation` est stocké dans `config.json` (PC) et non dans le coffre : restaurer une sauvegarde remet aussi l'ancien coffre, donc un compteur dans le coffre reculerait. Le téléphone compare par `!=`. (Révisé : jeton aléatoire renouvelé à chaque restauration, et le code est redemandé après une restauration — Ruling 7.)
 - Le serveur écoute sur `0.0.0.0` (le QR liste les IP privées) : tout message non chiffré avec la clé du QR est refusé, et le pare-feu Windows limite aux réseaux privés.
 - Android n'a pas de permission « réseau local seulement » : l'APK déclare `INTERNET`, mais n'appelle que les IP du QR.
 
@@ -268,6 +268,7 @@ def validate_phone_vault(d: dict) -> Vault       # ValueError si structure ou ty
   - `hello` : `{"type","device_id","device_name","generation","last_sync","code_version","has_data","now"}` →
     `{"ok":True,"pc","lock_mode","pin_length","code_version","need_code","mode":"merge"|"replace","reason":None|"first"|"restored"|"stale","since"}`.
     `need_code` = `code_version` différent de celui du PC. `mode` = `"replace"` si `has_data` faux (`"first"`), si `generation != config["generation"]` (`"restored"`), si `last_sync` absent ou de plus de 180 jours (`"stale"`) ; sinon `"merge"`.
+    **Révisé pendant l'exécution (Rulings 5–7 du suivi) :** `need_code` est vrai si l'appareil n'est pas dans le registre, si `code_version` diffère **ou** si `generation` diffère ; la réponse au `hello` ne contient `code_version` que si `need_code` est faux ; un seul `hello` par session ; le `last_sync` du `sync` doit être celui du `hello` ; `generation` est un jeton aléatoire (chaîne) renouvelé à chaque restauration. Une requête en cours pendant un verrouillage du PC reçoit `{"ok": false, "error": "closed"}` (à traiter comme « QR expiré »).
   - `sync` : `{"type","device_id","device_name","code","replace","vault":{profiles,accounts,giftcards,deleted},"last_sync","now"}` →
     `{"ok":True,"vault":<to_dict sans settings ni sync>,"summary":{"to_pc","to_phone","deleted","conflicts"},"code_version","generation","synced_at","lock_mode","pin_length"}`.
     `replace` vrai → coffre PC renvoyé tel quel, rien d'enregistré sauf le registre de l'appareil.
@@ -455,12 +456,14 @@ PPM.vault = {
   listGiftcards(v, profileId|null),
   categoryLabel(v, category),
   saveAccount(v, data, now) -> account, saveGiftcard(v, data, now) -> card,
+  stamp(now, lastSync, previous) -> string,   // max(now, lastSync + 1 s, previous + 1 s) — voir ci-dessous
   deleteItem(v, kind, id, now),         // retire + pierre tombale {kind, id, at: now}
   spend(v, id, amount, today, now) -> card,   // historique {id: newId(), date: today, amount}
   isFinished(card, today), expiringSoon(cards, today, days = 30),
 }
 ```
 Messages d'erreur identiques à `app/api.py` / `app/giftcards.py` (« Le nom est obligatoire », « Choisis au moins un profil », « Les montants ne peuvent pas être négatifs », « Le montant doit être positif », « Montant supérieur au solde restant »).
+**Contrat d'horodatage (Ruling 8 du suivi, obligatoire) :** le PC juge « modifié depuis la dernière synchro » avec son horloge, alors que le téléphone date avec la sienne (jusqu'à 5 min d'écart). Toute modification faite sur le téléphone (`updated` d'un élément, `at` d'une pierre tombale) est donc datée `stamp(nowIso(), meta.last_sync, ancien updated)`, sinon une modification ou une dépense peut être perdue sans avertissement. `LocalApi` (Tâche 11) passe `last_sync` à chaque appel.
 
 - [ ] **Step 1: Écrire les tests**
 
@@ -471,6 +474,7 @@ test("saveAccount : updated = now, created conservé en modification");
 test("categoryLabel : « banque » devient « Banque » si elle existe");
 test("deleteItem ajoute une pierre tombale");
 test("spend : id d'historique, solde arrondi, updated = now ; montant > solde refusé");
+test("stamp : horloge du téléphone en retard sur le PC → date = last_sync + 1 s ; jamais ≤ l'updated précédent");
 test("listAccounts : favoris d'abord, ordre alphabétique sans accents");
 test("expiringSoon : 30 jours, ignore cartes finies");
 ```
