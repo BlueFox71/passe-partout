@@ -242,9 +242,11 @@ def private_ipv4s() -> list[str]:
     return out
 
 
-def qr_svg(payload: dict) -> str:
-    """QR code (correction « M ») du JSON compact, modules sombres sur fond blanc, marge incluse."""
-    qr = segno.make(_json_compact(payload).decode("utf-8"), error="m", micro=False)
+def qr_svg(payload: "dict | str") -> str:
+    """QR code (correction « M ») du JSON compact (ou de la chaîne telle quelle, ex. une URL), modules sombres
+    sur fond blanc, marge incluse."""
+    text = payload if isinstance(payload, str) else _json_compact(payload).decode("utf-8")
+    qr = segno.make(text, error="m", micro=False)
     buf = io.BytesIO()
     qr.save(buf, kind="svg", scale=4, border=4, dark="#000000", light="#ffffff", xmldecl=False)
     return buf.getvalue().decode("utf-8")

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -19,7 +20,9 @@ from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 
+from app import apk as apk_mod
 from app import giftcards as gc_logic
+from app.apkserve import APK_SECONDS, ApkServer
 from app.crypto import CryptoError
 from app.exporter import export_png, export_text
 from app.images import normalize_image as _normalize_image
@@ -30,6 +33,7 @@ from app.store import VaultCorrupt, VaultStore
 from app.sync import SYNC_SECONDS, SyncServer, SyncSession, b64u, private_ipv4s, qr_svg
 from app.syncflow import SyncFlow
 from app.textutil import normalize
+from app.version import VERSION
 
 CLIPBOARD_SECONDS = 30
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -71,10 +75,19 @@ class _SyncRun:
         self.error: str | None = None
 
 
+class _ApkRun:
+    """Un serveur d'installation de l'appli Android en cours (indépendant de la synchro)."""
+
+    def __init__(self, server, deadline: float):
+        self.server = server
+        self.deadline = deadline
+        self.stopped = False
+
+
 class Api:
     def __init__(self, store: VaultStore, clipboard, clock=time.monotonic, dialogs=None,
                  schedule=_timer, today=date.today, wall_clock=time.time,
-                 sync_server=SyncServer, sync_hosts=private_ipv4s):
+                 sync_server=SyncServer, sync_hosts=private_ipv4s, apk_server=ApkServer):
         self._store = store
         self._clip = clipboard
         self._clock = clock
@@ -86,6 +99,8 @@ class Api:
         self._sync_server = sync_server
         self._sync_hosts = sync_hosts
         self._sync: _SyncRun | None = None
+        self._apk_server = apk_server
+        self._apk: _ApkRun | None = None
         self._config_path = store.path.parent / "config.json"
         self._config = self._read_config()
         # le délai anti-essais survit à un redémarrage (horloge murale, état dans config.json)
@@ -689,6 +704,68 @@ class Api:
         with self._mutex:
             run = self._detach_sync()
         self._stop_sync(run)
+        return {}
+
+    # ---------------------------------------------------------------- installer l'appli Android depuis le PC
+    # Indépendant de la synchro et du verrouillage (l'APK est public, aucune donnée en jeu).
+    def get_app_info(self) -> dict:
+        return {"version": VERSION, "apk": apk_mod.find_apk() is not None}
+
+    def apk_install_start(self) -> dict:
+        path = apk_mod.find_apk()
+        info = apk_mod.apk_info(path)
+        if path is None or info is None:
+            raise ValueError("Aucune appli Android n'est incluse dans cette version de Passe-Partout.")
+        hosts = list(self._sync_hosts())
+        if not hosts:
+            raise ValueError("Aucun réseau local détecté : connecte le PC au Wi-Fi ou au câble de la box.")
+        with self._mutex:
+            old, self._apk = self._apk, None
+        if old is not None:
+            self._stop_apk(old)  # hors du mutex
+        token = secrets.token_urlsafe(16)
+        server = self._apk_server(path, token, info["filename"])
+        server.start()
+        run = _ApkRun(server, self._clock() + APK_SECONDS)
+        with self._mutex:
+            old, self._apk = self._apk, run
+        if old is not None:
+            self._stop_apk(old)
+        self._schedule(APK_SECONDS + 0.2, lambda: self._apk_timeout(run))
+        urls = [f"http://{h}:{server.port}/{token}/{info['filename']}" for h in hosts]
+        return {"qr": qr_svg(urls[0]), "url": urls[0], "urls": urls, "seconds": APK_SECONDS,
+                "version": info["version"]}
+
+    @staticmethod
+    def _stop_apk(run: _ApkRun) -> None:
+        run.stopped = True
+        run.server.stop()
+
+    def _apk_timeout(self, run: _ApkRun) -> None:
+        if not run.stopped:
+            self._stop_apk(run)
+
+    def apk_install_status(self) -> dict:
+        with self._mutex:
+            run = self._apk
+            if run is None:
+                return {"state": "closed", "seconds_left": 0, "downloads": 0}
+            downloads = int(getattr(run.server, "downloads", 0))
+            expired = self._clock() >= run.deadline
+            left = 0 if expired else max(0, math.ceil(run.deadline - self._clock()))
+            if downloads > 0:
+                state = "done"  # le serveur reste ouvert jusqu'à l'échéance (second téléphone possible)
+            else:
+                state = "expired" if expired else "waiting"
+        if expired and not run.stopped:
+            self._stop_apk(run)
+        return {"state": state, "seconds_left": left if state == "waiting" else 0, "downloads": downloads}
+
+    def apk_install_stop(self) -> dict:
+        with self._mutex:
+            run, self._apk = self._apk, None
+        if run is not None:
+            self._stop_apk(run)
         return {}
 
     @_locked
