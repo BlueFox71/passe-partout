@@ -67,7 +67,9 @@
     } catch (e) { /* stockage indisponible : rien à effacer */ }
   }
 
-  if (!isNative && params.get("reset") === "1") resetPreview();
+  // ?demo=sync (aperçu) : téléphone neuf face à un PC simulé, pour essayer la synchro sans PC ni téléphone.
+  const demoSync = !isNative && params.get("demo") === "sync";
+  if (!isNative && (params.get("reset") === "1" || demoSync)) resetPreview();
   const native = isNative ? PPM.native : PPM.nativeFake.create({ store: localStore() });
   PP.api = new PPM.LocalApi({ native });
 
@@ -180,7 +182,13 @@
 
   // Raccourcis d'URL pour les captures (natif simulé seulement) :
   // ?demo=1 charge la démo si le téléphone est vide ; &code=1234 déverrouille aussi.
+  // ?demo=sync : accueil d'un téléphone neuf ; « Scanner » lit le QR d'un PC simulé (code 1234).
   async function urlHooks() {
+    if (demoSync) {
+      native.simulatePc({ code: DEMO_CODE, vault: demoResponse().vault, lockMode: "pin", pcName: "PC de démonstration" });
+      PP.toast(`PC simulé prêt — code ${DEMO_CODE}`);
+      return;
+    }
     if (isNative || params.get("demo") !== "1") return;
     const s = await PP.refreshState();
     if (!s.has_data) {

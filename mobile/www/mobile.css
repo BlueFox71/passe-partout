@@ -85,6 +85,21 @@ body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
 .m-tab.on { color: var(--pink); text-shadow: 0 0 8px var(--pink); }
 .m-tab.on svg { filter: drop-shadow(0 0 6px var(--pink)); }
 
+/* ---------- synchronisation ---------- */
+.m-sync-body { padding: 8px 16px 24px; display: flex; justify-content: center; }
+.m-sync-card { align-items: stretch; }
+.m-sync-card > .m-link { align-self: center; }
+.m-sync-code { max-width: none; }
+.m-sync-code h2 { text-align: center; }
+.m-busy { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 64px; color: var(--muted); }
+.m-spin {
+  width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(0, 229, 255, .25); border-top-color: var(--cyan);
+  animation: m-spin .8s linear infinite;
+}
+@keyframes m-spin { to { transform: rotate(360deg); } }
+.m-sync-ok { color: var(--ok); font-weight: 800; font-size: 18px; text-shadow: 0 0 10px rgba(61, 255, 176, .45); }
+.m-sync-sum { color: var(--muted); }
+
 /* ---------- éléments partagés adaptés au téléphone ---------- */
 #toasts { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px); width: calc(100% - 32px); }
 .toast { max-width: 100%; text-align: center; }

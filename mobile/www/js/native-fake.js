@@ -7,6 +7,8 @@
 // sinon PPM.nativeFake.memoryStore() (mémoire). PPM.nativeFake est lui-même une instance par défaut.
 // Commandes de test : setBiometricError(code|null), setBiometricAvailable(bool), setNextQr(texte),
 // firePause(), fireResume() ; `clipboard` = dernière copie {text, sensitive, seconds}.
+// simulatePc({code, vault, lockMode, pinLength, pcName}) : PC simulé (aperçu et tests uniquement) ; scanQr
+// renvoie alors un nouveau QR de ce PC et post() lui répond comme app/syncflow.py (voir simulatedPc).
 (function (root) {
   const FILE = "pp.fake.file:";
   const PREF = "pp.fake.pref:";
@@ -72,6 +74,7 @@
     let bioError = null;
     let bioAvailable = true;
     let nextQr = null;
+    let simPc = null;
 
     // Clé « Keystore » par alias, créée à la demande ; deleteKey la détruit (anciens blobs illisibles).
     function keyId(alias, createIt) {
@@ -148,12 +151,14 @@
           nextQr = null;
           return t;
         }
+        if (simPc) return simPc.newQr();
         const PP = root.PP;
         if (!PP || !PP.modal || typeof document === "undefined") return null;
         return askQr(PP);
       },
 
       async post(url, body, timeoutMs) {
+        if (simPc && simPc.owns(url)) return simPc.post(url, body);
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
@@ -169,9 +174,152 @@
       setBiometricError(code) { bioError = code || null; },
       setBiometricAvailable(v) { bioAvailable = Boolean(v); },
       setNextQr(text) { nextQr = text == null ? null : String(text); },
+      simulatePc(opts) { simPc = simulatedPc(opts); return simPc; },
     };
     return fake;
   }
+
+  // ---------------------------------------------------------------- PC simulé (aperçu, tests)
+  // Imite app/sync.py + app/syncflow.py pour le parcours normal : session à usage unique par QR, un seul
+  // hello, code exigé (appareil inconnu, code changé), remplacement au premier lancement, sinon fusion
+  // simplifiée (le plus récent gagne, pierres tombales appliquées). Pas de contrôle d'heure ; délai
+  // anti-essais simplifié (30 s après 3 codes faux). Aucune sécurité : jamais utilisé sur un vrai téléphone.
+  const SIM_HOSTS = ["172.31.240.1", "192.168.1.42"]; // le 1er imite un adaptateur virtuel qui ne répond pas
+  const SIM_PORT = 47823;
+  const SIM_KINDS = { profiles: "profile", accounts: "account", giftcards: "giftcard" };
+  const SIM_INVALID = "Message de synchronisation invalide.";
+
+  function simulatedPc({ code, vault, lockMode = "pin", pinLength, pcName = "PC simulé" } = {}) {
+    const C = root.PPM && root.PPM.crypto ? root.PPM.crypto : require("./crypto.js");
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    let pcVault = { profiles: [], accounts: [], giftcards: [], deleted: [], ...clone(vault || {}) };
+    delete pcVault.version;
+    let pcCode = String(code);
+    let codeVersion = hex(8);
+    const generation = hex(8);
+    const devices = new Set();
+    let fails = 0;
+    let blockedUntil = 0;
+    let session = null; // {key, hello, state, seen}
+    const refuse = (error, message, extra = {}) => ({ ok: false, error, message, ...extra });
+    const lockInfo = () => ({
+      lock_mode: lockMode, pin_length: lockMode === "pin" ? (pinLength || pcCode.length) : null,
+    });
+
+    function hello(msg) {
+      if (session.hello) return refuse("invalid", SIM_INVALID);
+      const known = devices.has(msg.device_id);
+      const needCode = !known || msg.code_version !== codeVersion || msg.generation !== generation;
+      let mode = "merge";
+      let reason = null;
+      if (!msg.has_data) [mode, reason] = ["replace", "first"];
+      else if (msg.generation !== generation) [mode, reason] = ["replace", "restored"];
+      else if (!msg.last_sync) [mode, reason] = ["replace", "stale"];
+      session.hello = { device_id: msg.device_id, need_code: needCode, mode, last_sync: msg.last_sync ?? null };
+      const reply = { ok: true, pc: pcName, ...lockInfo(), need_code: needCode, mode, reason,
+        since: msg.last_sync ?? null };
+      if (!needCode) reply.code_version = codeVersion;
+      return reply;
+    }
+
+    function merge(phone) {
+      const out = { profiles: [], accounts: [], giftcards: [], deleted: [] };
+      const summary = { to_pc: 0, to_phone: 0, deleted: 0, conflicts: 0 };
+      const tomb = new Map();
+      for (const t of [...pcVault.deleted, ...(phone.deleted || [])]) tomb.set(`${t.kind}:${t.id}`, t);
+      out.deleted = [...tomb.values()];
+      for (const [list, kind] of Object.entries(SIM_KINDS)) {
+        const byId = new Map();
+        for (const it of pcVault[list]) byId.set(it.id, { pc: it });
+        for (const it of phone[list] || []) byId.set(it.id, { ...byId.get(it.id), phone: it });
+        for (const [id, { pc, phone: ph }] of byId) {
+          if (tomb.has(`${kind}:${id}`)) {
+            summary.deleted++;
+            continue;
+          }
+          const phoneWins = !!ph && (!pc || ph.updated > pc.updated);
+          if (phoneWins) summary.to_pc++;
+          else if (!ph || JSON.stringify(ph) !== JSON.stringify(pc)) summary.to_phone++;
+          out[list].push(phoneWins ? ph : pc);
+        }
+      }
+      return { vault: out, summary };
+    }
+
+    function sync(msg) {
+      const h = session.hello;
+      if (!h || msg.device_id !== h.device_id || msg.replace !== (h.mode === "replace")
+        || (msg.last_sync ?? null) !== h.last_sync) {
+        return refuse("invalid", SIM_INVALID);
+      }
+      if (h.need_code) {
+        if (typeof msg.code !== "string" || !msg.code) return refuse("code_required", "Saisis le code du PC.");
+        const wait = Math.max(0, Math.ceil((blockedUntil - Date.now()) / 1000));
+        if (wait > 0) return refuse("bad_code", "Code incorrect.", { wait_seconds: wait });
+        if (msg.code !== pcCode) {
+          fails++;
+          if (fails >= 3) blockedUntil = Date.now() + 30000;
+          return refuse("bad_code", "Code incorrect.", { wait_seconds: fails >= 3 ? 30 : 0 });
+        }
+        fails = 0;
+      }
+      let summary;
+      if (msg.replace) {
+        const items = pcVault.profiles.length + pcVault.accounts.length + pcVault.giftcards.length;
+        summary = { to_pc: 0, to_phone: items, deleted: 0, conflicts: 0 };
+      } else {
+        const m = merge(msg.vault || {});
+        pcVault = m.vault;
+        summary = m.summary;
+      }
+      devices.add(h.device_id);
+      session.state = "done";
+      return { ok: true, vault: { version: 1, ...clone(pcVault) }, summary, code_version: codeVersion,
+        generation, synced_at: msg.now, ...lockInfo() };
+    }
+
+    async function handle(msg) {
+      if (msg.type === "cancel") {
+        session.state = "closed";
+        return { ok: true };
+      }
+      if (msg.type === "hello") return hello(msg);
+      if (msg.type === "sync") return sync(msg);
+      return refuse("invalid", SIM_INVALID);
+    }
+
+    return {
+      get vault() { return clone(pcVault); },
+      // nouveau QR = nouvelle session (l'ancienne est abandonnée, comme sur le PC)
+      newQr() {
+        const key = C.randomBytes(32);
+        session = { key, hello: null, state: "waiting", seen: new Set() };
+        return JSON.stringify({ v: 1, hosts: SIM_HOSTS, port: SIM_PORT, key: C.b64u(key), pc: pcName });
+      },
+      owns(url) { return SIM_HOSTS.some((h) => String(url).startsWith(`http://${h}:${SIM_PORT}/`)); },
+      async post(url, body) {
+        if (!String(url).startsWith(`http://${SIM_HOSTS[1]}:`)) throw new Error("injoignable");
+        if (!session || session.state !== "waiting") return { status: 410, text: "" };
+        let msg;
+        try {
+          msg = await C.open(session.key, body, C.AAD_REQ);
+        } catch (e) {
+          return { status: 403, text: "" };
+        }
+        const n = JSON.parse(body).n;
+        if (session.seen.has(n)) return { status: 409, text: "" };
+        session.seen.add(n);
+        const reply = await handle(msg);
+        return { status: 200, text: await C.seal(session.key, reply, C.AAD_RESP) };
+      },
+      setCode(newCode) {
+        pcCode = String(newCode);
+        codeVersion = hex(8);
+      },
+      lock() { if (session) session.state = "closed"; }, // le PC arrête la synchro en se verrouillant
+    };
+  }
+
 
   async function browserCopy(text) {
     try {
