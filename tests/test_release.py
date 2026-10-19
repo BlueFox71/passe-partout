@@ -130,3 +130,19 @@ def test_publish_refuses_existing_release(monkeypatch, tmp_path):
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resp([{"tag_name": "v1.0.0", "id": 1}]))
     with pytest.raises(RuntimeError, match="existe déjà"):
         publish("1.0.0", exe, "n", "tok")
+
+
+def test_publish_existing_draft_says_delete_it(monkeypatch, tmp_path):
+    exe = tmp_path / "e.exe"
+    exe.write_bytes(b"x")
+    calls = []
+
+    def fake(req, timeout=None):
+        calls.append(req)
+        return _Resp([{"tag_name": "v1.0.0", "id": 7, "draft": True}])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError) as e:
+        publish("1.0.0", exe, "n", "tok")
+    assert str(e.value) == ("Un brouillon de la version v1.0.0 existe sur GitHub (reste d'un essai raté) : "
+                            "supprime-le sur GitHub, puis relance.")
+    assert [c.get_method() for c in calls] == ["GET"]  # rien n'est créé ni supprimé

@@ -80,7 +80,11 @@ def publish(version, exe_path, notes, token, repo=REPO, dry_run=False):
         return
     api = f"https://api.github.com/repos/{repo}"
     existing = _request(f"{api}/releases?per_page=100", token) or []
-    if any(r.get("tag_name") == tag for r in existing):
+    same = [r for r in existing if r.get("tag_name") == tag]
+    if any(r.get("draft") for r in same):
+        raise RuntimeError(f"Un brouillon de la version {tag} existe sur GitHub (reste d'un essai raté) : "
+                           "supprime-le sur GitHub, puis relance.")
+    if same:
         raise RuntimeError(f"La release {tag} existe déjà sur {repo} : rien n'est écrasé. Monte la version.")
     # Brouillon d'abord : la release n'est visible qu'une fois l'exe téléversé.
     release = _request(
