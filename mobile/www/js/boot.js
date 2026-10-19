@@ -1,0 +1,199 @@
+/* Téléphone — démarrage : choix du natif (réel ou simulé), API locale, navigation, verrouillage en arrière-plan.
+   ui/app.js (copié dans shared/) fournit PP ; PP.start n'est jamais appelé ici : boot.js le remplace. */
+(function () {
+  const PPM = window.PPM;
+  const V = PPM.vault;
+  const BACKGROUND_LOCK_MS = 30000; // verrouillage si l'appli est restée plus de 30 s en arrière-plan
+  const DEFAULT_SETTINGS = { autolock_minutes: 5, biometric: false };
+  const DEMO_CODE = "1234";
+  const params = new URLSearchParams(location.search);
+
+  // ---------------------------------------------------------------- natif
+  const isNative = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function"
+    && window.Capacitor.isNativePlatform() && PPM.native);
+
+  // localStorage peut être bloqué (navigation privée, aperçu) : repli en mémoire, sans erreur.
+  function localStore() {
+    let ls = null;
+    try {
+      ls = window.localStorage;
+      ls.getItem("pp.probe");
+    } catch (e) {
+      ls = null;
+    }
+    const mem = PPM.nativeFake.memoryStore();
+    return {
+      getItem(k) {
+        if (ls) {
+          try {
+            const v = ls.getItem(k);
+            if (v !== null) return v;
+          } catch (e) { /* lecture refusée : mémoire */ }
+        }
+        return mem.getItem(k);
+      },
+      setItem(k, v) {
+        mem.setItem(k, v);
+        if (ls) try { ls.setItem(k, v); } catch (e) { /* quota ou blocage : reste en mémoire */ }
+      },
+      removeItem(k) {
+        mem.removeItem(k);
+        if (ls) try { ls.removeItem(k); } catch (e) { /* ignoré */ }
+      },
+    };
+  }
+
+  // ?reset=1 (aperçu) : efface les données simulées pour repartir d'un téléphone neuf.
+  function resetPreview() {
+    try {
+      const ls = window.localStorage;
+      const keys = [];
+      for (let i = 0; i < ls.length; i++) if (ls.key(i).startsWith("pp.fake.")) keys.push(ls.key(i));
+      keys.forEach((k) => ls.removeItem(k));
+    } catch (e) { /* stockage indisponible : rien à effacer */ }
+  }
+
+  if (!isNative && params.get("reset") === "1") resetPreview();
+  const native = isNative ? PPM.native : PPM.nativeFake.create({ store: localStore() });
+  PP.api = new PPM.LocalApi({ native });
+
+  // ---------------------------------------------------------------- coffre de démonstration (aperçu)
+  function demoResponse() {
+    const now = new Date();
+    const ts = V.nowIso(now);
+    const day = (n) => V.todayIso(new Date(now.getTime() + n * 86400000));
+    let seq = 0;
+    const id = (p) => `demo-${p}-${++seq}`;
+    const J = "demo-p-jules";
+    const A = "demo-p-alexis";
+    const acc = (name, category, login, password, extra = {}) => ({
+      id: id("a"), name, category, login, password, login_mask: null, password_mask: null, image: null,
+      favorite: false, profiles: [J], created: ts, updated: ts, ...extra,
+    });
+    const card = (name, code, pin, initial, remaining, end, extra = {}) => ({
+      id: id("g"), name, code, pin, initial, remaining, end_date: end, image: null,
+      profiles: [J], history: [], updated: ts, ...extra,
+    });
+    return {
+      ok: true,
+      vault: {
+        version: 1,
+        profiles: [
+          { id: J, name: "Jules", avatar: null, color: "#ff3d9a", updated: ts },
+          { id: A, name: "Alexis", avatar: null, color: "#00b8d9", updated: ts },
+        ],
+        accounts: [
+          acc("BoursoBank", "Banque", "48213377", "Tr0mpette!Bleue", { favorite: true }),
+          acc("PayPal", "Banque", "jules@exemple.fr", "Papillon#2024", { profiles: [J, A] }),
+          acc("Impôts", "État", "1234567890123", "Fisc@lite2026", { login_mask: "## ## ### ### ###", favorite: true }),
+          acc("Ameli", "Santé", "185067512345678", "Vitale!Carte77", { login_mask: "# ## ## ## ### ### ##" }),
+          acc("Gmail", "Boîte mail", "jules@exemple.fr", "Nuage-Violet-88"),
+          acc("Outlook", "Boîte mail", "alexis@exemple.fr", "Soleil-Levant-19", { profiles: [A] }),
+          acc("Netflix", "Streaming", "famille@exemple.fr", "Chill&Popcorn9", { profiles: [J, A], favorite: true }),
+          acc("Steam", "Plateforme de jeu", "julesgamer", "GabeN-3-confirmed"),
+          acc("Discord", "Réseau social", "jules_rp", "D20-critique!"),
+          acc("Instagram", "Réseau social", "alexis.photo", "Photo!Lumiere42", { profiles: [A] }),
+          acc("Amazon", "Site Web", "jules@exemple.fr", "Colis!Rapide42", { profiles: [J, A] }),
+        ],
+        giftcards: [
+          card("Fnac", "6301 2245 8890 1123", "4821", 50, 50, day(20)),
+          card("Decathlon", "2090 5531 7742 0068", "", 40, 25.5, day(240), {
+            profiles: [J, A],
+            history: [{ id: id("h"), date: day(-12), amount: 14.5 }],
+          }),
+        ],
+        deleted: [],
+      },
+      summary: { to_pc: 0, to_phone: 15, deleted: 0, conflicts: 0 },
+      code_version: "demo",
+      generation: "demo",
+      synced_at: ts,
+      pc: "PC de démonstration",
+      lock_mode: "pin",
+      pin_length: DEMO_CODE.length,
+    };
+  }
+
+  // Charge la démo (code 1234) puis affiche l'écran de verrouillage.
+  async function loadDemo() {
+    if (isNative) return;
+    await PP.call("apply_sync", demoResponse(), DEMO_CODE);
+    await PP.call("lock");
+    PP.state.locked = true;
+    PP.toast(`Démo chargée — code ${DEMO_CODE}`);
+    await PP.route();
+  }
+
+  PP.mobile = { native, preview: !isNative, loadDemo };
+
+  // ---------------------------------------------------------------- navigation
+  PP.route = async () => {
+    PP.modal.close();
+    const s = await PP.refreshState();
+    if (s.corrupt) return PP.views.welcome.showCorrupt();
+    if (s.locked) return PP.views.lock.show();
+    if (!s.has_data) return PP.views.welcome.show();
+    // réglages lus après déverrouillage : le minuteur d'inactivité de ui/app.js s'en sert
+    try {
+      PP.state.settings = { ...DEFAULT_SETTINGS, ...(await PP.call("get_settings")) };
+    } catch (e) {
+      PP.state.settings = { ...DEFAULT_SETTINGS };
+    }
+    if (PP.state.profileId === undefined) PP.state.profileId = null; // « Tout le monde »
+    return PP.views.shell.show();
+  };
+
+  // ---------------------------------------------------------------- arrière-plan
+  let pausedAt = null;
+  if (typeof native.onPause === "function") native.onPause(() => { pausedAt = Date.now(); });
+  if (typeof native.onResume === "function") {
+    native.onResume(() => {
+      const away = pausedAt == null ? 0 : Date.now() - pausedAt;
+      pausedAt = null;
+      const st = PP.state;
+      if (away > BACKGROUND_LOCK_MS && st.has_data && !st.locked) PP.lockNow().catch(() => {});
+    });
+  }
+
+  // ---------------------------------------------------------------- aperçu
+  function previewBadge() {
+    const b = document.createElement("div");
+    b.className = "m-preview-badge";
+    b.textContent = "APERÇU — données de démonstration";
+    document.body.classList.add("m-preview");
+    document.body.appendChild(b);
+  }
+
+  // Raccourcis d'URL pour les captures (natif simulé seulement) :
+  // ?demo=1 charge la démo si le téléphone est vide ; &code=1234 déverrouille aussi.
+  async function urlHooks() {
+    if (isNative || params.get("demo") !== "1") return;
+    const s = await PP.refreshState();
+    if (!s.has_data) {
+      await PP.call("apply_sync", demoResponse(), DEMO_CODE);
+      await PP.call("lock");
+    }
+    const code = params.get("code");
+    if (code) {
+      const st = await PP.refreshState();
+      if (st.locked) await PP.call("unlock", code);
+    }
+  }
+
+  async function start() {
+    if (!isNative) previewBadge();
+    PP.state.filter = "all";
+    PP.state.query = "";
+    try {
+      await urlHooks();
+    } catch (e) { /* erreur déjà signalée par PP.call */ }
+    try {
+      await PP.route();
+    } catch (e) {
+      PP.render(`<div class="m-screen"><div class="m-card glass"><h2>Démarrage impossible</h2>
+        <p>${PP.esc((e && e.message) || "Erreur inconnue")}</p></div></div>`);
+    }
+  }
+
+  start();
+})();

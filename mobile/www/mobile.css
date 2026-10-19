@@ -1,0 +1,99 @@
+/* Passe-Partout — téléphone : ajustements du thème néon partagé (shared/style.css) pour 360–412 px. */
+:root {
+  --tabbar-h: 62px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body.mobile { font-size: 15px; -webkit-tap-highlight-color: transparent; }
+#app { height: 100%; height: 100dvh; }
+button, a, input { touch-action: manipulation; }
+
+/* ---------- écrans plein cadre (verrou, accueil) ---------- */
+.m-screen {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  padding: calc(24px + var(--safe-top)) 16px calc(24px + var(--safe-bottom));
+  animation: fade .35s ease;
+}
+body.m-preview .m-screen { padding-top: calc(48px + var(--safe-top)); }
+.m-screen > * { flex: none; }
+.m-screen .big-brand { font-size: 22px; gap: 10px; }
+.m-screen .big-brand svg { width: 64px; height: 64px; }
+.m-center { text-align: center; }
+
+.m-card { width: 100%; max-width: 380px; padding: 22px 18px; display: flex; flex-direction: column; gap: 14px; }
+.m-card h2 { margin: 0; font-size: 20px; }
+.m-card p { margin: 0; color: var(--muted); line-height: 1.45; }
+.m-card .warn-box { line-height: 1.45; font-size: 14px; }
+.m-wide { width: 100%; justify-content: center; min-height: 48px; white-space: normal; text-align: center; }
+.btn svg { width: 18px; height: 18px; flex: none; }
+
+/* ---------- verrouillage ---------- */
+.m-lock { gap: 14px; }
+.m-lock-card { width: 100%; max-width: 340px; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 4px 0; }
+.m-prompt { color: var(--muted); text-align: center; }
+.m-lock-card .pin-dots { height: 18px; gap: 14px; }
+.m-pad { grid-template-columns: repeat(3, 76px); gap: 14px; }
+.m-pad button { height: 64px; border-radius: 18px; font-size: 24px; color: var(--text); }
+.m-pad button:hover { background: var(--glass-strong); box-shadow: none; }
+.m-pad button:active { background: rgba(255, 61, 154, .22); box-shadow: 0 0 14px rgba(255, 61, 154, .4); }
+.m-pad .m-ok { color: var(--pink); }
+.m-pw { min-height: 48px; font-size: 16px; text-align: center; } /* 16 px : pas de zoom automatique */
+.m-check { display: none; color: var(--cyan); font-size: 13px; font-weight: 600; letter-spacing: .04em; }
+.lock-card.checking .m-check { display: block; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.lock-card.checking .m-err { display: none; }
+.lock-card.checking #go, .lock-card.waiting #go { opacity: .5; pointer-events: none; }
+.lock-card.waiting .pin-pad { opacity: .45; pointer-events: none; transition: opacity .2s; }
+.m-err { text-align: center; min-height: 20px; line-height: 1.4; }
+.m-wait { color: var(--warn); font-variant-numeric: tabular-nums; }
+.m-fp {
+  width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--cyan); background: rgba(0, 229, 255, .06);
+  color: var(--cyan); box-shadow: 0 0 16px rgba(0, 229, 255, .45); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; margin-top: 4px;
+}
+.m-fp:active { transform: scale(.94); }
+.m-fp svg { width: 34px; height: 34px; }
+.m-fp + .hint { margin-top: -8px; }
+.m-link {
+  min-height: 44px; padding: 10px 16px; border: 0; background: none; cursor: pointer;
+  color: var(--faint); text-decoration: underline; text-underline-offset: 3px; font-size: 14px;
+}
+
+/* ---------- coquille : contenu + barre d'onglets ---------- */
+.m-shell { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.m-body {
+  flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding-top: var(--safe-top);
+}
+body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
+.m-head { padding: 14px 16px 8px; }
+.m-head h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.m-soon { padding-top: 80px; }
+.m-soon-ic svg { width: 44px; height: 44px; opacity: .5; }
+.m-tabs {
+  flex: none; display: flex; height: calc(var(--tabbar-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
+  background: rgba(5, 3, 10, .88); border-top: 1px solid rgba(255, 255, 255, .08); backdrop-filter: blur(12px);
+}
+.m-tab {
+  flex: 1; min-width: 0; min-height: 44px; border: 0; background: none; cursor: pointer; color: var(--faint);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 11px; font-weight: 600; transition: color .15s;
+}
+.m-tab svg { width: 22px; height: 22px; }
+.m-tab.on { color: var(--pink); text-shadow: 0 0 8px var(--pink); }
+.m-tab.on svg { filter: drop-shadow(0 0 6px var(--pink)); }
+
+/* ---------- éléments partagés adaptés au téléphone ---------- */
+#toasts { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px); width: calc(100% - 32px); }
+.toast { max-width: 100%; text-align: center; }
+.modal, .modal.sm, .modal.wide { width: 100%; max-width: calc(100% - 24px); padding: 20px 16px; }
+.modal-foot { flex-wrap: wrap; }
+.modal-foot .btn { min-height: 44px; justify-content: center; }
+
+.m-preview-badge {
+  position: fixed; top: calc(6px + var(--safe-top)); left: 50%; transform: translateX(-50%); z-index: 99;
+  padding: 4px 10px; border-radius: 8px; background: var(--warn); color: #1a0b2e;
+  font-weight: 700; font-size: 11px; white-space: nowrap; pointer-events: none;
+}
