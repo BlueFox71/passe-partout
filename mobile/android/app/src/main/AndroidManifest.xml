@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -24,11 +23,15 @@
             </intent-filter>
         </activity>
 
-        <!-- Lecteur de QR code ZXing (scanQr) : toujours en portrait -->
+        <!-- Lecteur de QR code ZXing (scanQr) : toujours en portrait, captures d'écran bloquées -->
         <activity
-            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:name=".SecureCaptureActivity"
             android:screenOrientation="portrait"
-            tools:replace="screenOrientation" />
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

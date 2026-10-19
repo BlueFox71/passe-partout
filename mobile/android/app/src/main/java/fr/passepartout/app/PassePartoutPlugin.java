@@ -20,6 +20,7 @@ import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.FragmentActivity;
+import androidx.lifecycle.Lifecycle;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -35,6 +36,7 @@ import com.journeyapps.barcodescanner.ScanOptions;
 
 import java.security.KeyStore;
 import java.util.Arrays;
+import java.util.Collections;
 
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
@@ -100,10 +102,29 @@ public class PassePartoutPlugin extends Plugin {
         return ks;
     }
 
-    private SecretKey existingKey(String alias) throws Exception {
-        KeyStore ks = keyStore();
-        if (!ks.containsAlias(alias)) return null;
-        return (SecretKey) ks.getKey(alias, null);
+    // Clé de l'alias, ou null seulement si son absence est confirmée. Sur keystore2 (Android 12+), une erreur
+    // passagère du démon (SYSTEM_ERROR, BACKEND_BUSY…) se lit comme « pas de clé » (containsAlias faux, getKey
+    // null) : l'absence n'est admise que si trois lectures espacées, sur un KeyStore rechargé, concordent
+    // (getKey, containsAlias et aliases()). Sinon NativeError FAILED (réessayable) : jamais KEY_MISSING, et
+    // jamais de nouvelle clé qui écraserait la vraie.
+    private static final int KEY_CHECKS = 3;
+    private static final long KEY_CHECK_DELAY_MS = 150;
+
+    private SecretKey findKey(String alias) throws Exception {
+        for (int i = 0; i < KEY_CHECKS; i++) {
+            if (i > 0) Thread.sleep(KEY_CHECK_DELAY_MS);
+            boolean absent;
+            try {
+                KeyStore ks = keyStore();
+                SecretKey key = (SecretKey) ks.getKey(alias, null);
+                if (key != null) return key;
+                absent = !ks.containsAlias(alias) && !Collections.list(ks.aliases()).contains(alias);
+            } catch (Exception e) {
+                absent = false; // lecture impossible : rien n'est confirmé
+            }
+            if (!absent) throw new NativeError("FAILED", "Erreur du module de sécurité Android.");
+        }
+        return null;
     }
 
     private SecretKey createKey(String alias, boolean biometric) throws Exception {
@@ -185,8 +206,8 @@ public class PassePartoutPlugin extends Plugin {
                 });
                 return;
             }
-            SecretKey key = existingKey(alias);
-            if (key == null) key = createKey(alias, false);
+            SecretKey key = findKey(alias);
+            if (key == null) key = createKey(alias, false); // absence confirmée : première clé
             cipher.init(Cipher.ENCRYPT_MODE, key);
             byte[] ct = cipher.doFinal(data);
             JSObject r = new JSObject();
@@ -204,7 +225,7 @@ public class PassePartoutPlugin extends Plugin {
             if (alias == null || alias.isEmpty()) throw new NativeError("FAILED", "Alias manquant.");
             byte[] raw = decodeB64(call.getString("blob"), "BAD_BLOB", "Données chiffrées illisibles.");
             if (raw.length < IV_BYTES + TAG_BITS / 8) throw new NativeError("BAD_BLOB", "Données chiffrées illisibles.");
-            SecretKey key = existingKey(alias);
+            SecretKey key = findKey(alias);
             if (key == null) throw new NativeError("KEY_MISSING", "Clé de sécurité introuvable.");
             byte[] iv = Arrays.copyOfRange(raw, 0, IV_BYTES);
             byte[] ct = Arrays.copyOfRange(raw, IV_BYTES, raw.length);
@@ -263,6 +284,13 @@ public class PassePartoutPlugin extends Plugin {
             return;
         }
         activity.runOnUiThread(() -> {
+            // appli en arrière-plan ou en cours de fermeture : BiometricPrompt ne peut pas s'afficher
+            if (activity.isFinishing() || activity.isDestroyed()
+                || activity.getSupportFragmentManager().isStateSaved()
+                || !activity.getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+                call.reject("Fenêtre d'empreinte indisponible.", "FAILED");
+                return;
+            }
             try {
                 BiometricPrompt prompt = new BiometricPrompt(activity, ContextCompat.getMainExecutor(getContext()),
                     new BiometricPrompt.AuthenticationCallback() {
@@ -387,7 +415,8 @@ public class PassePartoutPlugin extends Plugin {
         opts.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
         opts.setPrompt("Vise le QR code affiché sur le PC");
         opts.setBeepEnabled(false);
-        opts.setOrientationLocked(true); // portrait (CaptureActivity, voir AndroidManifest.xml)
+        opts.setOrientationLocked(true); // portrait (voir AndroidManifest.xml)
+        opts.setCaptureActivity(SecureCaptureActivity.class); // captures d'écran bloquées pendant le scan
         Intent intent = opts.createScanIntent(getContext());
         startActivityForResult(call, intent, "scanResult");
     }

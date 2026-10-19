@@ -151,8 +151,9 @@
     },
 
     async removeFile(name) {
-      await removeRaw(name);
+      // .tmp d'abord : sinon readFile pourrait le reprendre une fois la cible effacée
       await removeRaw(name + TMP);
+      await removeRaw(name);
     },
 
     // ------------------------------------------------------------ préférences (JSON)
