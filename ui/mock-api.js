@@ -67,7 +67,7 @@
 
   let devices = [
     { id: "d1", name: "Pixel de Jules", last_sync: "2026-10-18T21:42:10" },
-    { id: "d2", name: "iPhone d'Alexis", last_sync: "2026-10-12T08:05:00" },
+    { id: "d2", name: "Téléphone d'Alexis", last_sync: "2026-10-12T08:05:00" },
   ];
   let sync = null; // { t0 }
   const FAKE_QR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29" shape-rendering="crispEdges"><rect width="29" height="29" fill="#fff"/>' +

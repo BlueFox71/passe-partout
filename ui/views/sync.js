@@ -39,7 +39,7 @@
     stopPolling();
     const my = token;
     const m = PP.modal.open(`
-      <h2>${PP.icon.sync} Synchroniser le téléphone</h2>
+      <h2>${PP.icon.sync.replace("<svg", '<svg style="width:22px"')} Synchroniser le téléphone</h2>
       <div class="sync-body">
         <div class="sync-qr" id="sy-qr">${start.qr}</div>
         <p class="sync-help">Sur le téléphone : <b>Synchro → Scanner</b></p>
@@ -106,7 +106,7 @@
   V.card = (devices) => `
         <div class="card glass">
           <h3>📱 Téléphones</h3>
-          <p>Les téléphones synchronisés avec ce PC. Un téléphone oublié devra scanner un nouveau QR code pour se synchroniser.</p>
+          <p>Les téléphones synchronisés avec ce PC. Un téléphone oublié devra redonner le code du PC à sa prochaine synchronisation.</p>
           ${devices.length ? devices.map((d) => `<div class="prof-row"><div style="flex:1"><div style="font-weight:600">${PP.esc(d.name)}</div>
             <div class="hint">dernière synchro le ${PP.esc(when(d.last_sync))}</div></div>
             <button class="btn btn-ghost" data-fd="${PP.esc(d.id)}" style="padding:6px 12px">Oublier</button></div>`).join("")
