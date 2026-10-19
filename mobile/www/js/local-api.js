@@ -630,7 +630,15 @@
         if (pair !== null && !isPair(pair)) invalid();
         const sentRev = this._syncRev;
         this._syncRev = null;
-        if (sentRev !== null && sentRev !== this._rev) return { error: "modified" };
+        if (sentRev !== null && sentRev !== this._rev) {
+          // Rien du coffre n'est appliqué, mais le secret tourné par le PC doit être gardé (chiffré, dans le
+          // coffre), sinon la prochaine synchro serait refusée : « PC non reconnu ». Pas de changement de révision.
+          if (pair && this._dataKey && this._hasData && this._vault) {
+            this._vault.pair = pair;
+            await this._saveVault();
+          }
+          return { error: "modified" };
+        }
         const hasCode = typeof code === "string" && code !== "";
         let dataKey = this._dataKey;
         let newKey = false;

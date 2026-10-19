@@ -1,6 +1,6 @@
 # Passe-Partout Mobile (Android) + synchronisation — Document de conception
 
-*19/10/2026 — projet : `D:\Documents\App Web\gestionnaire-mdp\` (logiciel PC existant) ; appli dans le sous-dossier `mobile/`.*
+*19/10/2026 — projet : `D:\Documents\Logiciels persos\gestionnaire-mdp\` (logiciel PC existant) ; appli dans le sous-dossier `mobile/`.*
 
 Légende : **[Jules]** = décidé par l'utilisateur ; **[choix Claude]** = décision de conception, contestable.
 
@@ -156,12 +156,43 @@ par le PC à l'étape 5 ; un code faux est refusé (avec le délai anti-essais d
 
 ## 9. Livraison
 
-- Projet `mobile/` (Capacitor) dans le dépôt existant, script de construction (`mobile/build.ps1`)
-  produisant `mobile/dist/passe-partout.apk` (APK signé avec une clé locale générée une fois et
-  conservée hors du dépôt, ex. `%APPDATA%\GestionnaireMdp\android-signing\`).
-- Installation : copier l'APK sur le téléphone (câble, ou servi temporairement par le PC), autoriser
-  l'installation hors Play Store.
-- Icône : la même clé blanche au contour néon (`ui/assets/icon.svg`), en icône adaptative Android.
+- Projet `mobile/` (Capacitor) dans le dépôt existant ; l'icône est la même clé blanche au contour
+  néon (`ui/assets/icon.svg`), en icône adaptative Android.
+
+**Construire l'appli**
+
+- `powershell -File mobileuild.ps1` produit `mobile\dist\passe-partout.apk`. Le premier build
+  télécharge les bibliothèques Android (plus long, connexion nécessaire).
+- L'APK est signé avec une clé locale, dans `%APPDATA%\GestionnaireMdpndroid-signing\`.
+  **Sauvegarde ce dossier** : sans cette clé, les futures mises à jour ne pourront pas s'installer
+  par-dessus l'appli existante ; il faudra la désinstaller, réinstaller, puis resynchroniser.
+
+**Installer sur le téléphone**
+
+- Copier l'APK sur le téléphone (câble USB, transfert de fichiers), l'ouvrir depuis le gestionnaire
+  de fichiers et autoriser « installer des applis inconnues » pour ce gestionnaire de fichiers.
+- Ou, avec le débogage USB activé : `adb install -r mobile\dist\passe-partout.apk`.
+
+**Première synchronisation**
+
+1. Sur le PC : « ⇅ Synchroniser le téléphone » (un QR code s'affiche).
+2. Sur le téléphone : « Synchroniser avec le PC », scanner le QR, puis saisir le code du PC.
+3. Au premier lancement, le pare-feu Windows demande une autorisation : l'accepter pour les
+   réseaux privés.
+
+**Ce qu'il faut savoir**
+
+- Les données du téléphone ne sont jamais sauvegardées par Android : avec un nouveau téléphone, on
+  resynchronise depuis le PC.
+- Après avoir restauré une sauvegarde sur le PC, chaque téléphone redemande le code une fois.
+- Si le téléphone affiche « PC non reconnu », utiliser « Ré-appairer » avec un nouveau QR code et le
+  code du PC.
+- Tant que le téléphone n'a jamais été appairé, il ne peut pas vérifier que le PC est le bon : ne
+  scanner que le QR affiché par son propre PC.
+- Quitter l'appli pendant que le scanner de QR est ouvert ne déclenche pas le verrouillage
+  automatique après 30 s.
+- Le téléphone et le PC doivent être à l'heure (heure automatique) : plus de 5 minutes d'écart
+  bloquent la synchronisation.
 
 ## 10. Laissé au bâtisseur
 Choix exacts des plugins Capacitor, structure du code mobile, minSdk, mise en page fine des écrans

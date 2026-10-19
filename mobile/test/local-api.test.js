@@ -555,6 +555,29 @@ test("Ruling 22 : coffre modifié pendant la synchro → apply_sync ne remplace 
   assert.equal((await api.sync_info()).last_sync, "2026-10-19T11:00:00");
 });
 
+test("coffre modifié pendant la synchro : le secret d'appairage tourné est quand même gardé (chiffré), rien d'autre", async () => {
+  const { api, store, native } = await synced();
+  await api.apply_sync(pcResp({ pair: PAIR }));
+  const PAIR2 = Buffer.alloc(32, 7).toString("base64url");
+  assert.notEqual(PAIR2, PAIR);
+  const before = (await api.sync_info()).last_sync;
+  await api.sync_payload();
+  await api.save_account({ name: "Ajout pendant la synchro", login: "x", password: "y", profiles: ["p1"] });
+  const r = await api.apply_sync(pcResp({ pair: PAIR2, synced_at: "2026-10-19T11:00:00" }));
+  assert.deepEqual(r, { error: "modified" });
+  assert.equal(await api.sync_pair(), PAIR2);
+  assert.equal((await api.sync_info()).last_sync, before);
+  assert.ok((await api.list_accounts(null)).some((a) => a.name === "Ajout pendant la synchro"));
+  const prefs = JSON.stringify(await native.getPref("pp.meta")) + JSON.stringify(await native.getPref("pp.settings"));
+  assert.ok(!prefs.includes(PAIR2));
+  assert.ok(!(await native.readFile("vault.enc")).includes(PAIR2));
+  // relu après redémarrage
+  const again = new LocalApi({ native: nativeFake.create({ store }), clock: () => 0, iterations: ITER });
+  assert.equal((await again.unlock("1234")).ok, true);
+  assert.equal(await again.sync_pair(), PAIR2);
+  assert.ok((await again.list_accounts(null)).some((a) => a.name === "Ajout pendant la synchro"));
+});
+
 test("empreinte : trop d'essais (LOCKOUT) → « bio_lockout », empreinte gardée", async () => {
   const { api, native } = await synced();
   await api.save_settings({ biometric: true });
