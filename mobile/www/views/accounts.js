@@ -47,8 +47,7 @@
     sheetSeq++;
     current = null;
     revealed = false;
-    const profiles = S.profiles || [];
-    if (S.profileId && (profiles.length < 2 || !profiles.some((p) => p.id === S.profileId))) S.profileId = null;
+    PP.mui.checkProfileFilter();
     if (S.filter !== "fav") S.filter = "all";
     container.innerHTML = `
       <div class="m-acc">
@@ -86,9 +85,7 @@
         renderChips();
         renderList();
       } else {
-        const id = key.slice(2) || null;
-        if (id === (S.profileId ?? null)) return;
-        S.profileId = id;
+        if (!PP.mui.pickProfile(key)) return;
         renderChips();
         load(token);
       }
@@ -155,14 +152,8 @@
 
   // ------------------------------------------------------------ filtres
   function renderChips() {
-    const el = root.querySelector("#acc-chips");
-    const profiles = S.profiles || [];
-    const chip = (key, label, on, aria = "") =>
-      `<button type="button" class="m-chip${on ? " on" : ""}" data-chip="${key}" aria-pressed="${on}"${aria}><span>${label}</span></button>`;
-    const pid = S.profileId ?? null;
-    el.innerHTML = (profiles.length > 1
-      ? chip("p:", "Tout le monde", pid === null) + profiles.map((p) => chip(`p:${esc(p.id)}`, esc(p.name), pid === p.id)).join("")
-      : "") + chip("fav", "⭐", favOnly(), ' aria-label="Favoris seulement"');
+    root.querySelector("#acc-chips").innerHTML =
+      PP.mui.profileChips() + PP.mui.chip("fav", "⭐", favOnly(), ' aria-label="Favoris seulement"');
   }
 
   // ------------------------------------------------------------ liste
@@ -255,21 +246,13 @@
   }
 
   // ------------------------------------------------------------ fiche et formulaire (par-dessus la liste)
-  function sheetEl() {
-    const sh = root.querySelector("#acc-sheet");
-    sh.hidden = false;
-    sh.scrollTop = 0;
-    return sh;
-  }
+  const sheetEl = () => PP.mui.showSheet(root.querySelector("#acc-sheet"));
 
   function closeSheet() {
     sheetSeq++;
     current = null;
     revealed = false;
-    if (!root) return;
-    const sh = root.querySelector("#acc-sheet");
-    sh.hidden = true;
-    sh.innerHTML = "";
+    if (root) PP.mui.hideSheet(root.querySelector("#acc-sheet"));
   }
 
   function openDetail(a) {
@@ -292,7 +275,7 @@
     const sh = root.querySelector("#acc-sheet");
     const keep = sh.scrollTop;
     sheetEl();
-    const names = (S.profiles || []).filter((p) => (a.profiles || []).includes(p.id)).map((p) => p.name);
+    const names = PP.mui.profileNames(a);
     const login = PP.applyMask(a.login, a.login_mask);
     const pw = revealed ? PP.applyMask(a.password, a.password_mask) : "•".repeat(Math.min(14, Math.max(8, a.password.length)));
     const created = dateFr(a.created);

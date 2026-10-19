@@ -7,23 +7,14 @@
   const F = (PP.views.accountForm = {});
   const S = PP.state;
   const esc = (s) => PP.esc(s);
-  const SUGGESTIONS = 5;
-
-  // Profil coché par défaut : celui de la puce choisie, sinon le premier.
-  function defaultProfiles() {
-    const profiles = S.profiles || [];
-    if (S.profileId && profiles.some((p) => p.id === S.profileId)) return [S.profileId];
-    return profiles.length ? [profiles[0].id] : [];
-  }
 
   F.open = (host, account, { live, onSaved, onDeleted, onCancel }) => {
     const a = account
       ? { ...account }
       : { id: null, name: "", category: "", login: "", password: "", login_mask: null, password_mask: null,
           image: null, favorite: false, profiles: [] };
-    const profs = new Set(account ? a.profiles || [] : defaultProfiles());
+    const profs = new Set(account ? a.profiles || [] : PP.mui.defaultProfiles());
     let showPw = !account;
-    let auto = false; // logo posé automatiquement depuis la bibliothèque
     let busy = false;
 
     host.innerHTML = `
@@ -32,15 +23,7 @@
         <div class="m-bar-title">${account ? "Modifier le compte" : "Nouveau compte"}</div>
       </div>
       <form class="m-sheet-body m-form" id="f-form" novalidate autocomplete="off">
-        <div class="field">
-          <label for="f-name">Nom</label>
-          <div class="m-name-row"><div id="f-logo"></div>
-            <input class="input m-in" id="f-name" value="${esc(a.name)}" placeholder="Ex. Netflix, Impôts…"
-              autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next"></div>
-          <div class="m-suggest" id="f-sug"></div>
-          <div class="m-logo-line"><span class="logo-hint" id="f-hint"></span>
-            <button type="button" class="m-link m-unlogo" id="f-unlogo" hidden>Retirer le logo</button></div>
-        </div>
+        ${PP.mui.nameField(a.name, "Ex. Netflix, Impôts…")}
         <div class="field">
           <label for="f-cat">Catégorie</label>
           <input class="input m-in" id="f-cat" list="f-cats" value="${esc(a.category)}" placeholder="Ex. Banque"
@@ -71,75 +54,9 @@
       </form>`;
 
     const $ = (sel) => host.querySelector(sel);
-    const name = $("#f-name");
+    const { input: name, closeSug } = PP.mui.bindNameField(host, a, "#f-cat");
     const pw = $("#f-pw");
     const err = $("#f-err");
-
-    // ---------------------------------------------------------- logo et suggestions
-    const drawLogo = () => {
-      $("#f-logo").innerHTML = PP.logo({ name: name.value.trim() || "?", image: a.image }, "m-flogo");
-      $("#f-unlogo").hidden = !a.image;
-    };
-    const setHint = (t) => { $("#f-hint").textContent = t; };
-    const libraryLogo = (entry) => {
-      try {
-        return PP.logos.render(entry);
-      } catch (e) {
-        return null; // dessin impossible : on garde l'initiale
-      }
-    };
-    // Logo de la bibliothèque : posé quand un nom connu est choisi ou tapé en entier, retiré si le nom
-    // change ensuite ; jamais par-dessus une image venue du PC, sauf choix explicite dans la liste.
-    const onLogo = (entry, explicit) => {
-      if (entry && (explicit || !a.image || auto)) {
-        const img = libraryLogo(entry);
-        if (img) {
-          a.image = img;
-          auto = true;
-          setHint(`Logo « ${entry[0]} » ajouté.`);
-        }
-      } else if (!entry && auto) {
-        a.image = null;
-        auto = false;
-        setHint("");
-      }
-      drawLogo();
-    };
-
-    const sug = $("#f-sug");
-    let items = [];
-    const closeSug = () => { items = []; sug.innerHTML = ""; };
-    const drawSug = () => {
-      const typed = PP.normalize(name.value);
-      items = PP.logos.suggest(name.value, SUGGESTIONS).filter((e) => PP.normalize(e[0]) !== typed);
-      sug.innerHTML = items.map((e, i) => {
-        const img = libraryLogo(e);
-        return `<button type="button" class="m-opt" data-i="${i}">
-          ${img ? `<div class="logo img"><img src="${esc(img)}" alt=""></div>` : PP.logo({ name: e[0] })}<span>${esc(e[0])}</span></button>`;
-      }).join("");
-    };
-    sug.addEventListener("click", (e) => {
-      const o = e.target.closest("[data-i]");
-      if (!o) return;
-      const entry = items[Number(o.dataset.i)];
-      if (!entry) return;
-      name.value = entry[0];
-      closeSug();
-      onLogo(entry, true);
-      $("#f-cat").focus();
-    });
-    name.addEventListener("input", () => {
-      drawSug();
-      onLogo(PP.logos.find(name.value), false);
-    });
-    host.addEventListener("focusin", (e) => { if (e.target !== name && !sug.contains(e.target)) closeSug(); });
-    $("#f-unlogo").addEventListener("click", () => {
-      a.image = null;
-      auto = false;
-      setHint("");
-      drawLogo();
-    });
-    drawLogo();
 
     // ---------------------------------------------------------- catégories existantes (tous profils)
     PP.call("list_accounts", null).then((all) => {
@@ -166,21 +83,7 @@
     drawPw();
 
     // ---------------------------------------------------------- profils, favori
-    const drawProfs = () => {
-      $("#f-profs").innerHTML = (S.profiles || []).map((p) => {
-        const on = profs.has(p.id);
-        return `<button type="button" class="check m-pcheck${on ? " on" : ""}" data-p="${esc(p.id)}" aria-pressed="${on}">${PP.avatar(p)}${esc(p.name)}</button>`;
-      }).join("");
-    };
-    $("#f-profs").addEventListener("click", (e) => {
-      const c = e.target.closest("[data-p]");
-      if (!c) return;
-      const id = c.dataset.p;
-      if (profs.has(id)) profs.delete(id);
-      else profs.add(id);
-      drawProfs();
-    });
-    drawProfs();
+    PP.mui.profileChecks($("#f-profs"), profs);
     const fav = $("#f-fav");
     fav.addEventListener("click", () => {
       a.favorite = !a.favorite;

@@ -212,6 +212,46 @@ body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
 .m-toggle { align-self: flex-start; min-height: 44px; border: 0; background: none; padding: 0; cursor: pointer; }
 .m-form .btn-danger { margin-top: 8px; }
 
+/* ---------- cartes cadeaux ---------- */
+.m-chips:empty { display: none; }
+.m-banner { margin: 6px 16px 4px; padding: 6px 6px 6px 12px; gap: 8px; font-size: 13px; line-height: 1.4; }
+.m-banner-t { flex: 1; min-width: 0; }
+.m-banner-see { flex: none; min-height: 40px; padding: 0 12px; }
+.m-banner-x {
+  flex: none; width: 40px; height: 40px; border: 0; border-radius: 10px; background: none; cursor: pointer;
+  color: var(--muted); font-size: 15px;
+}
+.m-banner-x:active { background: var(--glass-strong); }
+.m-gc-list {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 4px 8px 96px; overscroll-behavior: contain;
+}
+.m-gc-fab { right: 16px; }
+.m-gc-item .t { flex: 1; min-width: 0; }
+.m-gc-item .t b, .m-gc-item .t small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-gc-item .t small.soon { color: var(--warn); }
+.m-gc-amt { flex: none; font-weight: 800; font-size: 15px; color: #e6fdff; text-shadow: 0 0 10px rgba(0, 229, 255, .45); }
+.m-gc-item.done { filter: grayscale(.8); opacity: .55; }
+.m-gc-none { padding: 24px 0 8px; }
+.m-gc-end { font-size: 13px; color: var(--muted); }
+.m-gc-end.soon { color: var(--warn); }
+.m-gc-bal { cursor: default; text-align: center; }
+.m-gc-bal:hover { transform: none; border-color: var(--line); box-shadow: none; }
+.m-gc-bal .amount { margin: 4px 0; font-size: 34px; }
+.m-spend { display: flex; flex-direction: column; gap: 6px; }
+.m-spend-row { display: flex; gap: 8px; }
+.m-spend-row .input { flex: 1; min-width: 0; }
+.m-spend-row .btn { flex: none; min-height: 46px; }
+.m-spend .err { min-height: 0; }
+.m-history { margin-top: 4px; max-width: none; }
+.m-history div { font-size: 14px; padding: 10px 4px; }
+.m-history .label { border: 0; padding-left: 0; }
+.m-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.m-two .field { min-width: 0; }
+.m-mono { font-family: "Cascadia Mono", Consolas, monospace; letter-spacing: .02em; }
+.m-opt-l { text-transform: none; letter-spacing: 0; }
+.m-form input[type="date"] { color-scheme: dark; }
+
 /* ---------- éléments partagés adaptés au téléphone ---------- */
 #toasts { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px); width: calc(100% - 32px); }
 .toast { max-width: 100%; text-align: center; }
