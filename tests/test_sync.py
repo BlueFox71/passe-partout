@@ -130,3 +130,131 @@ def test_cancel_closes_even_if_callback_raises():
     assert s.handle(seal(KEY, {"type": "cancel"}, AAD_REQ))[0] == 500
     assert s.state == "closed"
     assert s.handle(seal(KEY, {"type": "hello"}, AAD_REQ))[0] == 410
+
+
+# ---------------------------------------------------------------- état lu sans verrou (Tâche 5)
+def test_status_reports_expired_without_any_message():
+    s, clock = make_session(ttl=120.0)
+    assert s.status == "waiting"
+    clock.t += 121
+    assert s.status == "expired"
+
+
+def test_close_after_deadline_gives_expired():
+    s, clock = make_session(ttl=120.0)
+    clock.t += 121
+    s.close()
+    assert s.state == "expired"
+
+
+def test_close_does_not_wait_for_message_in_progress():
+    """close() pendant qu'un message est traité : ne bloque pas, la session se ferme ensuite."""
+    import threading
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(m):
+        entered.set()
+        assert release.wait(5)
+        return {"ok": True}
+
+    s, _ = make_session(slow)
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=s.handle(seal(KEY, {"type": "hello"}, AAD_REQ))))
+    t.start()
+    assert entered.wait(5)
+    closer = threading.Thread(target=s.close)
+    closer.start()
+    closer.join(2)
+    assert not closer.is_alive(), "close() ne doit pas attendre la fin du message en cours"
+    assert s.status == "closed"
+    release.set()
+    t.join(5)
+    assert out["r"][0] == 200
+    assert s.state == "closed"
+    assert s.handle(seal(KEY, {"type": "sync"}, AAD_REQ))[0] == 410
+
+
+# ---------------------------------------------------------------- serveur HTTP, QR code
+def _post(port, path, body, method="POST"):
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        c.request(method, path, body=body, headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status, r.read()
+    finally:
+        c.close()
+
+
+@pytest.fixture
+def server():
+    from app.sync import SyncServer
+    created = []
+
+    def make(session):
+        srv = SyncServer(session, host="127.0.0.1")
+        srv.start()
+        created.append(srv)
+        return srv
+    yield make
+    for srv in created:
+        srv.stop()
+
+
+def test_server_roundtrip_on_loopback(server):
+    s, _ = make_session()
+    srv = server(s)
+    assert srv.port > 0
+    status, body = _post(srv.port, "/pp-sync", seal(KEY, {"type": "hello"}, AAD_REQ))
+    assert status == 200
+    assert open_sealed(KEY, body, AAD_RESP)[0] == {"ok": True, "echo": "hello"}
+    assert _post(srv.port, "/pp-sync", b"pas du json")[0] == 403
+
+
+def test_server_rejects_other_paths_and_huge_body(server):
+    import http.client
+    s, _ = make_session()
+    srv = server(s)
+    assert _post(srv.port, "/pp-sync", None, method="GET")[0] == 405
+    assert _post(srv.port, "/x", seal(KEY, {"type": "hello"}, AAD_REQ))[0] == 404
+    c = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+    try:
+        c.putrequest("POST", "/pp-sync")
+        c.putheader("Content-Length", str(70 * 1024 * 1024))
+        c.endheaders()  # corps jamais envoyé : le serveur doit répondre sans le lire
+        assert c.getresponse().status == 413
+    finally:
+        c.close()
+    assert s.state == "waiting"
+
+
+def test_server_stops_itself_after_successful_sync(server):
+    import time as _time
+    s, _ = make_session()
+    srv = server(s)
+    assert _post(srv.port, "/pp-sync", seal(KEY, {"type": "sync"}, AAD_REQ))[0] == 200
+    assert s.state == "done"
+    deadline = _time.monotonic() + 5
+    while srv.running and _time.monotonic() < deadline:
+        _time.sleep(0.05)
+    assert not srv.running
+    srv.stop()  # idempotent
+
+
+def test_private_ipv4s_filters(monkeypatch):
+    import socket
+    infos = [(socket.AF_INET, 0, 0, "", (ip, 0)) for ip in
+             ("127.0.0.1", "169.254.3.4", "192.168.1.20", "8.8.8.8", "10.0.0.5", "192.168.1.20")]
+    monkeypatch.setattr(sync.socket, "getaddrinfo", lambda *a, **k: infos)
+    assert sync.private_ipv4s() == ["192.168.1.20", "10.0.0.5"]
+
+    def fail(*a, **k):
+        raise socket.gaierror("x")
+    monkeypatch.setattr(sync.socket, "getaddrinfo", fail)
+    assert sync.private_ipv4s() == []
+
+
+def test_qr_svg_contains_svg():
+    svg = sync.qr_svg({"v": 1, "hosts": ["192.168.1.20"], "port": 50123, "key": "k" * 43, "pc": "PC-Jules"})
+    assert "<svg" in svg and "</svg>" in svg
+    assert "<?xml" not in svg
