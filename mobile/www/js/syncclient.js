@@ -167,10 +167,24 @@
     }
   }
 
-  const api = { parseQr, SyncClient, syncMessage, MESSAGES };
+  // Compare deux versions « x.y.z » : -1, 0 ou 1 ; lève une erreur si l'une est invalide.
+  function parseVersion(s) {
+    const m = typeof s === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(s) : null;
+    if (!m) throw new Error("version invalide : " + String(s));
+    return [Number(m[1]), Number(m[2]), Number(m[3])];
+  }
+  function compareVersions(a, b) {
+    const pa = parseVersion(a);
+    const pb = parseVersion(b);
+    for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+    return 0;
+  }
+
+  const api = { parseQr, SyncClient, syncMessage, MESSAGES, compareVersions };
   PPM.parseQr = parseQr;
   PPM.SyncClient = SyncClient;
   PPM.syncMessage = syncMessage;
   PPM.syncMessages = MESSAGES;
+  PPM.compareVersions = compareVersions;
   if (typeof module === "object") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -338,3 +338,20 @@ test("parcours appairé : faux PC refusé avant code et coffre ; PC qui a oubli�
   assert.equal(restored.h.reason, "restored");
   assert.notEqual(restored.r.pair, again.r.pair);
 });
+
+test("compareVersions : comparaison numérique des versions x.y.z", () => {
+  const { compareVersions } = require("../www/js/syncclient.js");
+  assert.strictEqual(compareVersions("1.10.0", "1.9.9"), 1);
+  assert.strictEqual(compareVersions("0.1.0", "1.0.0"), -1);
+  assert.strictEqual(compareVersions("1.0.0", "1.0.0"), 0);
+  assert.throws(() => compareVersions("1.0", "1.0.0"));
+  assert.throws(() => compareVersions("1.0.0", "v1.0.0"));
+});
+
+test("version.js généré : PPM.VERSION suit le fichier VERSION", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const expected = fs.readFileSync(path.join(__dirname, "..", "..", "VERSION"), "utf8").trim();
+  require("../www/js/version.js");
+  assert.strictEqual(globalThis.PPM.VERSION, expected);
+});

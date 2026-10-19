@@ -45,6 +45,11 @@ try {
     if (-not (Test-Path 'node_modules')) {
         Run 'npm ci' { npm ci }
     }
+    # Version unique : fichier VERSION à la racine du dépôt (x.y.z) -> versionName / versionCode (x*10000 + y*100 + z)
+    $versionName = (Get-Content (Join-Path $mobile '..\VERSION') -Raw).Trim()
+    if ($versionName -notmatch '^(\d+)\.(\d+)\.(\d+)$') { Fail "VERSION invalide : « $versionName »." }
+    $versionCode = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+    Write-Host "Version : $versionName (versionCode $versionCode)"
     Run 'npm run assemble' { npm run assemble }
     Run 'npx cap sync android' { npx cap sync android }
 
@@ -102,7 +107,7 @@ try {
     $env:PP_SIGNING_PROPERTIES = $propsFile
     Push-Location (Join-Path $mobile 'android')
     try {
-        Run 'gradlew assembleRelease' { .\gradlew.bat assembleRelease --no-daemon }
+        Run 'gradlew assembleRelease' { .\gradlew.bat assembleRelease --no-daemon "-PppVersionName=$versionName" "-PppVersionCode=$versionCode" }
     } finally {
         Pop-Location
     }

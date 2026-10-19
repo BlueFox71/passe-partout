@@ -3,6 +3,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeVersionFile } from "./version.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ui = join(here, "..", "..", "ui");
@@ -16,3 +17,5 @@ for (const f of FILES) {
   copyFileSync(join(ui, f), dest);
   console.log(`copié : ui/${f} → www/shared/${f}`);
 }
+
+writeVersionFile();
