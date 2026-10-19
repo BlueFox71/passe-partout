@@ -117,7 +117,7 @@
     container.querySelectorAll("[data-fd]").forEach((b) => b.addEventListener("click", async () => {
       const d = devices.find((x) => x.id === b.dataset.fd);
       if (!d) return;
-      if (!(await PP.confirm(`Oublier « ${d.name} » ?`, "Ce téléphone devra scanner un nouveau QR code pour se synchroniser à nouveau.", { ok: "Oublier", danger: true }))) return;
+      if (!(await PP.confirm(`Oublier « ${d.name} » ?`, "Ce téléphone devra redonner le code du PC à sa prochaine synchronisation.", { ok: "Oublier", danger: true }))) return;
       await PP.call("forget_device", d.id);
       PP.toast("Téléphone oublié");
       rerender();

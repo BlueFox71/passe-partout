@@ -1,3 +1,4 @@
+import json
 import threading
 from datetime import datetime
 
@@ -69,7 +70,7 @@ def now_iso():
 
 
 def hello(**kw):
-    msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel de Jules", "generation": 0,
+    msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel de Jules", "generation": None,
            "last_sync": None, "code_version": None, "has_data": False, "now": now_iso()}
     msg.update(kw)
     return msg
@@ -229,3 +230,74 @@ def test_list_and_forget_device(env):
     env.api.unlock(CODE)
     assert [d["id"] for d in env.api.list_devices()] == ["b"]  # enregistré
     assert env.api.forget_device("inconnu") == {}
+
+
+# ---------------------------------------------------------------- corrections (revue finale)
+def test_set_lock_closes_sync_session(env):  # Minor 1
+    env.api.sync_start()
+    srv = env.server
+    env.api.set_lock("pin", "654321")
+    assert srv.session.state == "closed" and srv.stopped
+    assert env.api.sync_status()["state"] == "closed"
+    assert env.send(hello(), server=srv)[0] == 410
+
+
+def test_set_lock_refused_keeps_sync_session(env):
+    env.api.sync_start()
+    with pytest.raises(ValueError):
+        env.api.set_lock("pin", "12")
+    assert env.api.sync_status()["state"] == "waiting" and not env.server.stopped
+
+
+def test_restore_backup_closes_sync_session(env):  # Minor 1
+    env.api.save_profile({"name": "Alexis"})  # crée une sauvegarde
+    name = env.api.list_backups()[0]["name"]
+    env.api.sync_start()
+    srv = env.server
+    env.api.restore_backup(name)
+    assert srv.session.state == "closed" and srv.stopped
+    assert env.api.sync_status()["state"] == "closed"
+    assert env.send(hello(), server=srv)[0] == 410
+
+
+def test_generation_token_created_on_sync_start(env, tmp_path):  # Ruling 7
+    env.api._config["generation"] = 3  # ancien compteur entier : remplacé par un jeton
+    env.api._write_config()
+    env.api.sync_start()
+    g = env.api._config["generation"]
+    assert isinstance(g, str) and len(g) >= 16
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["generation"] == g
+    env.api.sync_start()
+    assert env.api._config["generation"] == g  # stable tant qu'aucune sauvegarde n'est restaurée
+    status, r = env.send(hello())
+    status, r = env.send(sync())
+    assert r["ok"] and r["generation"] == g
+
+
+def test_save_failure_is_reported_in_status(env, monkeypatch):  # Minor 6
+    env.api.sync_start()
+    env.send(hello())
+
+    def boom(vault, backup=True):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(env.api._store, "save", boom)
+    status, r = env.send(sync())
+    assert status == 200 and r["ok"] is False and r["error"] == "save_failed"
+    st = env.api.sync_status()
+    assert st["state"] == "syncing" and st["summary"] is None
+    assert st["error"].startswith("Impossible d'enregistrer les données reçues")
+    assert CODE not in json.dumps(st)
+
+
+def test_unexpected_error_is_reported_in_status(env, monkeypatch):
+    env.api.sync_start()
+    env.send(hello())
+    run = env.api._sync
+
+    def boom(msg):
+        raise RuntimeError("secret interne")
+    monkeypatch.setattr(run.flow, "handle", boom)
+    status, _ = env.send(sync())
+    assert status == 500
+    err = env.api.sync_status()["error"]
+    assert err and "secret" not in err

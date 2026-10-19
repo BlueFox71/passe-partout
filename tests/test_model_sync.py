@@ -95,12 +95,14 @@ def test_set_and_replace_images_update_timestamp(api_unlocked):
     assert v.accounts[0].updated > "2000-01-01T00:00:00" and v.giftcards[0].updated > "2000-01-01T00:00:00"
 
 
-def test_restore_backup_increments_generation(tmp_path, api_unlocked, fake_clip, clock, dialogs):
+def test_restore_backup_replaces_generation_token(tmp_path, api_unlocked, fake_clip, clock, dialogs):
     cfg = tmp_path / "config.json"
-    assert api_unlocked._config.get("generation", 0) == 0
+    assert "generation" not in api_unlocked._config
     api_unlocked.save_account({"name": "X", "profiles": ["p1"]})  # crée une sauvegarde
     name = api_unlocked.list_backups()[0]["name"]
     api_unlocked.restore_backup(name)
-    assert json.loads(cfg.read_text(encoding="utf-8"))["generation"] == 1
+    g1 = json.loads(cfg.read_text(encoding="utf-8"))["generation"]
+    assert isinstance(g1, str) and g1
     api_unlocked.restore_backup(api_unlocked.list_backups()[0]["name"])  # la restauration échange les versions
-    assert json.loads(cfg.read_text(encoding="utf-8"))["generation"] == 2
+    g2 = json.loads(cfg.read_text(encoding="utf-8"))["generation"]
+    assert isinstance(g2, str) and g2 != g1  # jeton aléatoire : jamais une valeur déjà vue

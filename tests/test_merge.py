@@ -286,3 +286,46 @@ def test_retry_is_idempotent_when_phone_won_first_time():
     again = merge(first.vault, phone, LS, NOW)
     assert again.conflicts == 0 and again.to_pc == 0
     assert again.vault.to_dict() == first.vault.to_dict()
+
+
+# ---------------------------------------------------------------- contrat d'horodatage du téléphone (Ruling 8)
+# Quand le PC adopte la version d'un téléphone, il la date de l'heure de la synchro (Ruling 4) : l'élément
+# porte alors updated == last_sync. Le téléphone peut avoir jusqu'à 5 min de retard sur le PC (MAX_SKEW_SECONDS) :
+# une modification datée de sa seule horloge pourrait tomber AVANT last_sync, et la fusion la croirait antérieure
+# à la synchro (ni « plus récente » ni « modifiée des deux côtés ») → perdue sans copie. D'où le contrat : le
+# téléphone date toute modification (élément ou pierre tombale) de max(maintenant, last_sync + 1 s,
+# updated précédent + 1 s).
+LS_PLUS_1 = "2026-10-01T12:00:01"
+LS_MINUS_30 = "2026-10-01T11:59:30"
+
+
+def test_phone_edit_after_last_sync_survives_as_main_item():
+    pc = vault([acc("a1", "Netflix", LS, password="adopté")])  # version adoptée à la dernière synchro
+    phone = vault([acc("a1", "Netflix", LS_PLUS_1, password="modifié téléphone")])
+    r = merge(pc, phone, LS, NOW)
+    assert [a.password for a in r.vault.accounts] == ["modifié téléphone"]
+    assert r.to_pc == 1 and r.conflicts == 0
+
+
+def test_phone_edit_after_last_sync_survives_as_copy_when_pc_also_changed():
+    pc = vault([acc("a1", "Netflix", T1, password="modifié PC")])
+    phone = vault([acc("a1", "Netflix", LS_PLUS_1, password="modifié téléphone")])
+    r = merge(pc, phone, LS, NOW)
+    assert sorted(a.password for a in r.vault.accounts) == ["modifié PC", "modifié téléphone"]
+    assert r.conflicts == 1
+
+
+def test_phone_tombstone_after_last_sync_deletes_adopted_item():
+    pc = vault([acc("a1", "Netflix", LS)])
+    phone = vault(deleted=[tombstone("account", "a1", LS_PLUS_1)])
+    r = merge(pc, phone, LS, NOW)
+    assert r.vault.accounts == [] and r.deleted == 1
+
+
+def test_phone_edit_stamped_before_last_sync_is_not_guaranteed():
+    # horloge du téléphone en retard, contrat non respecté : la modification passe pour antérieure à la
+    # synchro et la version du PC (adoptée à last_sync) l'emporte — c'est ce que le contrat évite
+    pc = vault([acc("a1", "Netflix", LS, password="adopté")])
+    phone = vault([acc("a1", "Netflix", LS_MINUS_30, password="modifié téléphone")])
+    r = merge(pc, phone, LS, NOW)
+    assert [a.password for a in r.vault.accounts] == ["adopté"] and r.conflicts == 0

@@ -188,8 +188,15 @@ class Api:
         self._stop_sync(run)  # hors du mutex : voir _stop_sync
         return {}
 
-    @_locked
     def set_lock(self, mode: str, code: str | None) -> dict:
+        with self._mutex:
+            self._set_lock(mode, code)
+            # une synchro ouverte a été préparée avec l'ancien code : on l'arrête, comme lock()
+            run = self._detach_sync()
+        self._stop_sync(run)  # hors du mutex : voir _stop_sync
+        return {}
+
+    def _set_lock(self, mode: str, code: str | None) -> None:
         self._vault()
         if mode not in ("none", "pin", "password"):
             raise ValueError("Mode de verrou inconnu")
@@ -204,7 +211,6 @@ class Api:
         else:
             self._config.pop("pin_length", None)
         self._write_config()
-        return {}
 
     @_locked
     def get_settings(self) -> dict:
@@ -232,13 +238,21 @@ class Api:
             out.append({"name": p.name, "date": d})
         return out
 
-    @_locked
     def restore_backup(self, name: str) -> dict:
+        with self._mutex:
+            self._restore_backup(name)
+            # le coffre a été remplacé sous une synchro ouverte : on l'arrête, comme lock()
+            run = self._detach_sync()
+        self._stop_sync(run)  # hors du mutex : voir _stop_sync
+        return {}
+
+    def _restore_backup(self, name: str) -> None:
         if "/" in name or "\\" in name:
             raise ValueError("Sauvegarde introuvable")
         self._store.restore(self._store.backup_dir / name)
-        # nouvelle génération : le téléphone saura que le coffre a été remplacé (et non modifié)
-        self._config["generation"] = int(self._config.get("generation") or 0) + 1
+        # nouvelle génération (jeton aléatoire) : chaque téléphone saura que le coffre a été remplacé
+        # (et non modifié) et devra redonner le code du PC
+        self._config["generation"] = new_id()
         self._write_config()
         self._corrupt = False
         try:
@@ -247,7 +261,6 @@ class Api:
             self._store.forget_key()  # sauvegarde d'un autre code : il faudra le saisir
         except VaultCorrupt:
             self._corrupt = True
-        return {}
 
     # ---------------------------------------------------------------- comptes
     @_locked
@@ -592,12 +605,28 @@ class Api:
         if server is not None:
             server.stop()
 
+    def _sync_generation(self) -> str:
+        """Jeton de génération du coffre (à appeler sous le mutex) : créé et enregistré s'il manque ou n'est
+        pas une chaîne (config perdue, ancien compteur entier)."""
+        g = self._config.get("generation")
+        if not isinstance(g, str) or not g:
+            g = self._config["generation"] = new_id()
+            try:
+                self._write_config()
+            except OSError:
+                pass  # jeton gardé en mémoire : au pire, nouveau jeton au prochain lancement (code redemandé)
+        return g
+
     def _on_sync_message(self, run: _SyncRun, msg: dict) -> dict:
         # appelé depuis un thread du serveur HTTP : même mutex que l'interface
         with self._mutex:
             if self._sync is not run:
                 return {"ok": False, "error": "closed", "message": "Synchronisation arrêtée sur le PC."}
-            reply = run.flow.handle(msg)
+            try:
+                reply = run.flow.handle(msg)
+            except Exception:
+                run.error = "Erreur inattendue pendant la synchronisation."
+                raise
             if reply.get("ok") is False:
                 run.error = reply.get("message")
             elif msg.get("type") == "sync":
@@ -618,6 +647,7 @@ class Api:
             if self._lock_mode() == "none":
                 raise ValueError("Définis d'abord un code de verrouillage (Réglages) pour synchroniser un téléphone.")
             self._vault()
+            self._sync_generation()
             hosts = list(self._sync_hosts())
             if not hosts:
                 raise ValueError("Aucun réseau local détecté : connecte le PC au Wi-Fi ou au câble de la box.")

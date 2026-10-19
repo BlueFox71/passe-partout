@@ -10,6 +10,7 @@ from app.syncflow import MAX_SKEW_SECONDS, SyncFlow, validate_phone_vault
 from tests.conftest import sample_vault
 
 CODE = "123456"
+GEN = "gen-a"  # jeton de génération du coffre PC (aléatoire dans l'appli)
 NOW = datetime(2026, 10, 19, 12, 0, 0)
 
 
@@ -27,7 +28,7 @@ class Env:
             self.store.set_lock(CODE)
         else:
             self.store.save(self.store.vault, backup=False)
-        self.config = {"generation": 0, "lock_mode": "pin", "pin_length": 6}
+        self.config = {"generation": GEN, "lock_mode": "pin", "pin_length": 6}
         self.t = 0.0
         self.lockout = Lockout(lambda: self.t)
         self.persisted = 0
@@ -47,7 +48,7 @@ def env(tmp_path):
 
 
 def hello_msg(env=None, **kw):
-    msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel", "generation": 0,
+    msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel", "generation": GEN,
            "last_sync": iso(NOW - timedelta(days=1)), "code_version": env.store.code_version() if env else "x",
            "has_data": True, "now": iso(NOW)}
     msg.update(kw)
@@ -102,9 +103,11 @@ def test_hello_known_device_merges(env):
 
 
 def test_hello_after_restore_is_replace_restored(env):
-    env.config["generation"] = 1
+    env.config["generation"] = "gen-b"
     r = env.flow().handle(hello_msg(env))
     assert r["mode"] == "replace" and r["reason"] == "restored"
+    # coffre remplacé : le registre restauré ne prouve plus rien, le code est exigé (Ruling 7)
+    assert r["need_code"] is True and "code_version" not in r
     assert r["since"] == iso(NOW - timedelta(days=1))
 
 
@@ -147,7 +150,7 @@ def test_sync_without_hello_is_invalid(env):
 def test_sync_must_follow_hello_mode(env):
     flow = known(env)
     assert flow.handle(sync_msg(replace=True))["error"] == "invalid"
-    env.config["generation"] = 1
+    env.config["generation"] = "gen-b"
     flow = env.flow()
     assert flow.handle(hello_msg(env))["mode"] == "replace"
     assert flow.handle(sync_msg(replace=False))["error"] == "invalid"
@@ -193,7 +196,7 @@ def test_sync_merges_saves_backup_registers_device(env):
     assert r["ok"] is True
     assert r["summary"] == {"to_pc": 1, "to_phone": 0, "deleted": 0, "conflicts": 0}
     assert flow.summary == r["summary"] and flow.device_name == "Pixel"
-    assert r["synced_at"] == iso(NOW) and r["generation"] == 0
+    assert r["synced_at"] == iso(NOW) and r["generation"] == GEN
     assert r["lock_mode"] == "pin" and r["pin_length"] == 6
     assert len(env.store.list_backups()) == 1
     reloaded = VaultStore(env.store.path)
@@ -205,12 +208,13 @@ def test_sync_merges_saves_backup_registers_device(env):
 
 
 def test_sync_replace_returns_pc_vault(env):
-    env.config["generation"] = 2
+    env.config["generation"] = "gen-c"
     flow = env.flow()
     assert flow.handle(hello_msg(env))["mode"] == "replace"
     pv = phone_vault(accounts=[])
-    r = flow.handle(sync_msg(replace=True, vault=pv))
-    assert r["ok"] is True and r["generation"] == 2
+    assert flow.handle(sync_msg(replace=True, vault=pv))["error"] == "code_required"
+    r = flow.handle(sync_msg(replace=True, vault=pv, code=CODE))
+    assert r["ok"] is True and r["generation"] == "gen-c"
     expected = sample_vault().to_dict()
     assert r["vault"]["accounts"] == expected["accounts"]
     assert r["vault"]["giftcards"] == expected["giftcards"]
@@ -386,3 +390,102 @@ def test_last_sync_must_match_hello(env):
         assert r["ok"] is False and r["error"] == "invalid"
     assert env.store.path.read_bytes() == before
     assert flow.handle(sync_msg())["ok"] is True
+
+
+# ---------------------------------------------------------------- corrections (revue finale)
+def test_no_change_syncs_add_no_backup_change_adds_one(env):  # Ruling 9
+    for _ in range(5):
+        r = known(env).handle(sync_msg())
+        assert r["ok"] is True and r["summary"]["to_pc"] == 0
+    assert env.store.list_backups() == []
+    assert VaultStore(env.store.path).load(CODE).sync["devices"]["dev1"]["last_sync"] == iso(NOW)  # registre écrit
+    pv = phone_vault()
+    pv["accounts"][0]["password"] = "modifié sur le téléphone"
+    pv["accounts"][0]["updated"] = iso(NOW)
+    r = known(env).handle(sync_msg(vault=pv))
+    assert r["ok"] is True and r["summary"]["to_pc"] == 1
+    assert len(env.store.list_backups()) == 1
+
+
+@pytest.mark.parametrize("gen", ["gen-b", None])
+def test_generation_mismatch_needs_code_even_for_known_device(env, gen):  # Ruling 7
+    flow = env.flow()
+    r = flow.handle(hello_msg(env, generation=gen))
+    assert r["ok"] and r["need_code"] is True and r["mode"] == "replace" and r["reason"] == "restored"
+    assert flow.handle(sync_msg(replace=True))["error"] == "code_required"
+
+
+def test_pc_without_generation_token_needs_code(env):
+    env.config.pop("generation")  # config perdue : l'Api créera un nouveau jeton, jamais égal à celui du téléphone
+    r = env.flow().handle(hello_msg(env))
+    assert r["need_code"] is True and r["mode"] == "replace"
+
+
+@pytest.mark.parametrize("gen", [0, 1, True, ["gen-a"]])
+def test_generation_must_be_a_string(env, gen):
+    assert env.flow().handle(hello_msg(env, generation=gen))["error"] == "invalid"
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("  Pixel 8  ", "Pixel 8"), ("", "Téléphone"), ("   ", "Téléphone"), ("x" * 100, "x" * 60),
+])
+def test_device_name_is_cleaned(env, raw, expected):
+    flow = known(env) if raw == "  Pixel 8  " else env.flow()
+    if raw != "  Pixel 8  ":
+        assert flow.handle(hello_msg(env, device_name=raw))["ok"]
+        assert flow.device_name == expected
+    r = flow.handle(sync_msg(device_name=raw))
+    assert r["ok"] is True and flow.device_name == expected
+    assert VaultStore(env.store.path).load(CODE).sync["devices"]["dev1"]["name"] == expected
+
+
+class _FailingSave:
+    def __init__(self, store):
+        self._store = store
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+    def save(self, vault, backup=True):
+        raise OSError(28, "No space left on device", str(self._store.path))
+
+
+def test_save_failure_is_reported(env):  # Minor 6
+    flow = known(env)
+    flow._store = _FailingSave(env.store)
+    before = env.store.path.read_bytes()
+    r = flow.handle(sync_msg())
+    assert r["ok"] is False and r["error"] == "save_failed"
+    assert r["message"].startswith("Impossible d'enregistrer les données reçues")
+    assert str(env.store.path) not in r["message"] and CODE not in json.dumps(r) and "vault" not in r
+    assert flow.summary is None
+    assert env.store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["profiles"][0].__setitem__("avatar", "http://exemple.fr/a.png"),
+    lambda d: d["profiles"][0].__setitem__("avatar", 5),
+    lambda d: d.__setitem__("deleted", [{"kind": "account", "id": "x", "at": iso(NOW), "extra": 1}]),
+    lambda d: d["giftcards"][0].__setitem__("history",
+                                            [{"id": "h", "date": "2026-10-01", "amount": 5, "note": "x"}]),
+    lambda d: d["giftcards"][0].__setitem__("end_date", "31/12/2026"),
+    lambda d: d["giftcards"][0].__setitem__("end_date", "2026-12-31T00:00:00"),
+    lambda d: d["giftcards"][0].__setitem__("end_date", "2026-2-1"),
+    lambda d: d["giftcards"][0].__setitem__("end_date", 20261231),
+])
+def test_validate_phone_vault_rejects_more(mutate):  # Minor 3
+    d = _valid()
+    mutate(d)
+    with pytest.raises(ValueError):
+        validate_phone_vault(d)
+
+
+def test_validate_phone_vault_accepts_avatar_and_end_date():
+    d = _valid()
+    d["profiles"][0]["avatar"] = "data:image/png;base64,AAAA"
+    d["profiles"][1]["avatar"] = None
+    d["giftcards"][0]["end_date"] = "2026-12-31"
+    v = validate_phone_vault(d)
+    assert v.profiles[0].avatar.startswith("data:image/") and v.giftcards[0].end_date == "2026-12-31"
+    d["giftcards"][0]["end_date"] = None
+    assert validate_phone_vault(d).giftcards[0].end_date is None

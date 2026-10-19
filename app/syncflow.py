@@ -16,6 +16,8 @@ from app.model import Vault
 from app.store import VaultStore
 
 MAX_SKEW_SECONDS = 300
+DEVICE_NAME_MAX = 60
+DEFAULT_DEVICE_NAME = "Téléphone"
 
 _MESSAGES = {
     "no_lock": "Définis d'abord un code (PIN ou mot de passe) sur le PC pour synchroniser le téléphone.",
@@ -23,8 +25,11 @@ _MESSAGES = {
     "code_required": "Saisis le code du PC.",
     "bad_code": "Code incorrect.",
     "invalid": "Message de synchronisation invalide.",
+    "save_failed": "Impossible d'enregistrer les données reçues sur le PC.",
 }
 _KINDS = ("account", "giftcard", "profile")
+_TOMBSTONE_KEYS = frozenset({"kind", "id", "at"})
+_HISTORY_KEYS = frozenset({"id", "date", "amount"})
 
 
 class _Refused(Exception):
@@ -94,6 +99,18 @@ def _image(d: dict, key: str) -> None:
         _invalid(key)
 
 
+def _only_keys(d: dict, allowed: frozenset, what: str) -> None:
+    """Liste blanche : une clé inconnue (pierre tombale, dépense) est refusée plutôt que recopiée telle quelle."""
+    if not set(d) <= allowed:
+        _invalid(what)
+
+
+def _device_name(msg: dict) -> str:
+    """Nom affiché du téléphone : espaces retirés, 60 caractères au plus, « Téléphone » s'il est vide."""
+    name = _str(msg, "device_name", required=True).strip()[:DEVICE_NAME_MAX].strip()
+    return name or DEFAULT_DEVICE_NAME
+
+
 def _profile_ids(d: dict) -> None:
     p = d.get("profiles", [])
     if not isinstance(p, list) or not all(isinstance(x, str) for x in p):
@@ -121,7 +138,11 @@ def validate_phone_vault(d: dict) -> Vault:
         if not isinstance(d.get(key), list):
             _invalid(key)
 
-    profiles = [_item(p, "profile", (), ("avatar", "color")) for p in d["profiles"]]
+    profiles = []
+    for p in d["profiles"]:
+        _item(p, "profile", (), ("avatar", "color"))
+        _image(p, "avatar")
+        profiles.append(p)
     accounts = []
     for a in d["accounts"]:
         _item(a, "account", ("category", "login", "password"), ("login_mask", "password_mask"))
@@ -135,6 +156,8 @@ def validate_phone_vault(d: dict) -> Vault:
     giftcards = []
     for g in d["giftcards"]:
         _item(g, "giftcard", ("code", "pin"), ("end_date",))
+        if g.get("end_date") is not None:
+            _day(g["end_date"], "end_date")
         _image(g, "image")
         _profile_ids(g)
         if g.get("initial") is not None:
@@ -146,6 +169,7 @@ def validate_phone_vault(d: dict) -> Vault:
         for h in history:
             if not isinstance(h, dict):
                 _invalid("history")
+            _only_keys(h, _HISTORY_KEYS, "history")
             _str(h, "id", required=True, nonempty=True)
             _day(h.get("date"), "date")
             _amount(h.get("amount"), "amount", positive=True)
@@ -153,6 +177,7 @@ def validate_phone_vault(d: dict) -> Vault:
     for t in d["deleted"]:
         if not isinstance(t, dict) or t.get("kind") not in _KINDS:
             _invalid("deleted")
+        _only_keys(t, _TOMBSTONE_KEYS, "deleted")
         _str(t, "id", required=True, nonempty=True)
         _date(t.get("at"), "deleted")
 
@@ -223,8 +248,10 @@ class SyncFlow:
         mode = mode if mode in ("pin", "password") else "unknown"
         return mode, (cfg.get("pin_length") if mode == "pin" else None)
 
-    def _generation(self) -> int:
-        return int(self._config().get("generation") or 0)
+    def _generation(self) -> str | None:
+        """Jeton de génération du coffre PC (créé par l'Api, remplacé à chaque restauration de sauvegarde)."""
+        g = self._config().get("generation")
+        return g if isinstance(g, str) and g else None
 
     @staticmethod
     def _last_sync(msg: dict) -> str | None:
@@ -238,10 +265,8 @@ class SyncFlow:
         if self._hello is not None:
             raise _Refused("invalid")  # un seul hello par session : sinon on pourrait sonder la version du code
         device_id = _str(msg, "device_id", required=True, nonempty=True)
-        device_name = _str(msg, "device_name", required=True)
-        generation = msg.get("generation")
-        if generation is not None and (isinstance(generation, bool) or not isinstance(generation, int)):
-            _invalid("generation")
+        device_name = _device_name(msg)
+        generation = _str(msg, "generation", optional=True)
         last_sync = self._last_sync(msg)
         code_version = _str(msg, "code_version", optional=True)
         has_data = msg.get("has_data")
@@ -250,12 +275,16 @@ class SyncFlow:
         now = self._check_clock(msg)
         self._check_store()
 
-        # appareil inconnu (jamais vu ou « oublié ») ou code changé sur le PC → le code est exigé
+        # appareil inconnu (jamais vu ou « oublié »), code changé sur le PC ou coffre PC remplacé (restauration
+        # d'une sauvegarde, config perdue : nouvelle génération) → le code est exigé. La génération compte car
+        # une restauration ramène aussi l'ancien registre des appareils (un téléphone oublié y redevient connu).
         known = device_id in self._store.vault.sync.get("devices", {})
-        need_code = not known or code_version != self._store.code_version()
+        pc_generation = self._generation()
+        same_generation = pc_generation is not None and generation == pc_generation
+        need_code = not known or code_version != self._store.code_version() or not same_generation
         if not has_data:
             mode, reason = "replace", "first"
-        elif generation != self._generation():
+        elif not same_generation:
             mode, reason = "replace", "restored"
         elif last_sync is None or now - datetime.fromisoformat(last_sync) > timedelta(days=TOMBSTONE_DAYS):
             mode, reason = "replace", "stale"
@@ -290,7 +319,7 @@ class SyncFlow:
         if hello is None:
             raise _Refused("invalid")
         device_id = _str(msg, "device_id", required=True, nonempty=True)
-        device_name = _str(msg, "device_name", required=True)
+        device_name = _device_name(msg)
         if device_id != hello["device_id"]:
             _invalid("device_id")
         replace = msg.get("replace", False)
@@ -317,8 +346,14 @@ class SyncFlow:
             summary = {"to_pc": result.to_pc, "to_phone": result.to_phone, "deleted": result.deleted,
                        "conflicts": result.conflicts}
         vault.sync.setdefault("devices", {})[device_id] = {"name": device_name, "last_sync": synced_at}
-        # remplacement : seul le registre des appareils change, pas besoin de sauvegarde automatique
-        self._store.save(vault, backup=not replace)
+        # sauvegarde automatique seulement si les données du PC changent : sinon seul le registre des
+        # appareils change, et des synchros sans effet ne doivent pas évincer les points de restauration
+        changed = not replace and summary["to_pc"] > 0
+        try:
+            self._store.save(vault, backup=changed)
+        except OSError as e:
+            detail = e.strerror or type(e).__name__  # jamais str(e) : pas de chemin ni de contenu
+            raise _Refused("save_failed", f"Impossible d'enregistrer les données reçues : {detail}.")
 
         self.device_name = device_name
         self.summary = summary
