@@ -417,3 +417,14 @@ test("empreinte : vault.enc illisible → corrupt", async () => {
   assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "corrupt" });
   assert.equal((await api.get_state()).corrupt, true);
 });
+
+test("verify_code : mêmes règles que unlock, sans verrouiller ; sync_info donne le nom du PC", async () => {
+  const { api, clk } = setup();
+  await api.apply_sync(pcResp({ pc: "PC-Salon" }), "1234");
+  assert.deepEqual(await api.verify_code("0000"), { ok: false, wait_seconds: 1, error: "bad_code" });
+  assert.deepEqual(await api.verify_code("1234"), { ok: false, wait_seconds: 1, error: "wait" });
+  clk.now += 1000;
+  assert.deepEqual(await api.verify_code("1234"), { ok: true, wait_seconds: 0 });
+  assert.equal((await api.get_state()).locked, false);
+  assert.equal((await api.sync_info()).pc_name, "PC-Salon");
+});

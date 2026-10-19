@@ -264,3 +264,14 @@ body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
   padding: 4px 10px; border-radius: 8px; background: var(--warn); color: #1a0b2e;
   font-weight: 700; font-size: 11px; white-space: nowrap; pointer-events: none;
 }
+
+/* ---------- réglages ---------- */
+.m-set-body { padding: 4px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+.m-set-card { max-width: none; gap: 16px; padding: 14px 16px; }
+.m-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
+.m-set-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.m-set-t small { color: var(--muted); font-size: 13px; line-height: 1.35; }
+.m-set-sel { width: auto; min-width: 96px; min-height: 44px; }
+#s-bio { min-height: 44px; min-width: 52px; border: 0; background: none; padding: 0; justify-content: flex-end; }
+.m-set-code { align-items: center; display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+.m-set-body .btn { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }

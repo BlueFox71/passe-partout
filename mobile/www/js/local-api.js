@@ -368,6 +368,35 @@
       });
     }
 
+    // Redemande du code sans verrouiller ni rouvrir le coffre (ex. avant d'activer l'empreinte) :
+    // mêmes règles que unlock (délai anti-essais, « wait » = code non essayé, « bad_code » = faux).
+    verify_code(code) {
+      return this._run(async () => {
+        const wait = this._lockout.waitSeconds();
+        if (wait > 0) return { ok: false, wait_seconds: wait, error: "wait" };
+        if (!this._hasData) return { ok: false, wait_seconds: 0, error: "corrupt" };
+        code = String(code ?? "");
+        let wrapped = null;
+        try {
+          wrapped = parseJson(dec.decode(await this._native.unwrap(ALIAS_CODE, this._keys.code)));
+        } catch (e) { /* clé du Keystore perdue ou blob abîmé */ }
+        if (!isWrapped(wrapped)) {
+          await this._markCorrupt();
+          return { ok: false, wait_seconds: 0, error: "corrupt" };
+        }
+        try {
+          await C.unwrapWithCode(wrapped, code);
+        } catch (e) {
+          this._lockout.fail();
+          await this._persistLockout();
+          return { ok: false, wait_seconds: this._lockout.waitSeconds(), error: "bad_code" };
+        }
+        this._lockout.success();
+        await this._persistLockout();
+        return { ok: true, wait_seconds: 0 };
+      });
+    }
+
     unlock_biometric() {
       return this._run(async () => {
         if (!this._hasData || !this._bioOn()) return { ok: false, error: "bio_invalidated" };
@@ -510,6 +539,7 @@
         // sans données utilisables (neuf ou corrompu) : présenté comme neuf, le PC exige le code et remplace
         generation: this._hasData ? strOrNull(this._meta.generation) : null,
         last_sync: this._hasData ? strOrNull(this._meta.last_sync) : null,
+        pc_name: this._hasData ? strOrNull(this._meta.pc_name) : null,
         code_version: this._hasData ? strOrNull(this._meta.code_version) : null,
         has_data: this._hasData,
         now: V.nowIso(this._date()),
