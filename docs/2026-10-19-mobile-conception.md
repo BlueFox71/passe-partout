@@ -163,7 +163,7 @@ par le PC à l'étape 5 ; un code faux est refusé (avec le délai anti-essais d
 
 - `powershell -File mobile\build.ps1` produit `mobile\dist\passe-partout.apk`. Le premier build
   télécharge les bibliothèques Android (plus long, connexion nécessaire).
-- L'APK est signé avec une clé locale, dans `%APPDATA%\GestionnaireMdp\android-signing\`.
+- L'APK est signé avec une clé locale, dans `%APPDATA%\PassePartout\android-signing\`.
   **Sauvegarde ce dossier** : sans cette clé, les futures mises à jour ne pourront pas s'installer
   par-dessus l'appli existante ; il faudra la désinstaller, réinstaller, puis resynchroniser.
 

@@ -18,8 +18,23 @@ APP_NAME = "Passe-Partout"
 DESKTOP_SWITCHDESKTOP = 0x0100
 
 
-def default_data_dir() -> Path:
-    return Path(os.environ.get("APPDATA", Path.home())) / "GestionnaireMdp"
+DATA_DIR_NAME = "PassePartout"
+OLD_DATA_DIR_NAME = "GestionnaireMdp"  # nom du dossier jusqu'au 19/10/2026
+
+
+def default_data_dir(appdata: Path | None = None) -> Path:
+    """Dossier des données ; l'ancien dossier « GestionnaireMdp » est renommé au premier lancement.
+
+    Si les deux existent, le nouveau est gardé et l'ancien laissé intact (rien n'est écrasé).
+    """
+    base = Path(appdata or os.environ.get("APPDATA", Path.home()))
+    new, old = base / DATA_DIR_NAME, base / OLD_DATA_DIR_NAME
+    if not new.exists() and old.exists():
+        try:
+            os.replace(old, new)  # même disque : simple renommage, rien n'est recopié
+        except OSError:
+            return old  # dossier occupé (logiciel ouvert ailleurs) : on garde l'ancien pour cette fois
+    return new
 
 
 def ui_dir() -> Path:

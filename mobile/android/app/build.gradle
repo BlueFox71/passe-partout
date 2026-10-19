@@ -1,7 +1,7 @@
 apply plugin: 'com.android.application'
 
 // Signature de la version « release » : mobile/build.ps1 passe le chemin du fichier signing.properties
-// (hors dépôt, dans %APPDATA%/GestionnaireMdp/android-signing) par -PppSigningProperties=… ou la variable
+// (hors dépôt, dans %APPDATA%/PassePartout/android-signing) par -PppSigningProperties=… ou la variable
 // d'environnement PP_SIGNING_PROPERTIES. Clés lues : storePassword, keyAlias, keyPassword et, en option,
 // storeFile (par défaut passe-partout.jks à côté du fichier). Sans ce fichier, l'APK release n'est pas signé.
 def ppSigningPath = project.findProperty('ppSigningProperties') ?: System.getenv('PP_SIGNING_PROPERTIES')

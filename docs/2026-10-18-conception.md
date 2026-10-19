@@ -73,7 +73,7 @@ gratuites. Toute l'interface est en **français**.
   (date + montant) [choix Claude].
 
 ### Stockage [choix Claude]
-- Un seul fichier de données (JSON) dans `%APPDATA%\GestionnaireMdp\`, images incluses (en base64,
+- Un seul fichier de données (JSON) dans `%APPDATA%\PassePartout\`, images incluses (en base64,
   redimensionnées à ~256 px pour rester léger).
 - **Sans verrou** : fichier en clair.
 - **Avec verrou** : tout le fichier (images comprises) chiffré — dérivation de clé **scrypt** (ou

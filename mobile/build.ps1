@@ -49,7 +49,17 @@ try {
     Run 'npx cap sync android' { npx cap sync android }
 
     # --- Clé de signature (hors dépôt) ---------------------------------------------------------
-    $signDir = Join-Path $env:APPDATA 'GestionnaireMdp\android-signing'
+    # Dossier des données renommé le 19/10/2026 (GestionnaireMdp → PassePartout) : même migration que app/main.py
+    $dataDir = Join-Path $env:APPDATA 'PassePartout'
+    $oldDataDir = Join-Path $env:APPDATA 'GestionnaireMdp'
+    if (-not (Test-Path $dataDir) -and (Test-Path $oldDataDir)) {
+        Rename-Item -Path $oldDataDir -NewName 'PassePartout'
+    }
+    $signDir = Join-Path $dataDir 'android-signing'
+    if (-not (Test-Path (Join-Path $signDir 'passe-partout.jks')) -and (Test-Path (Join-Path $oldDataDir 'android-signing\passe-partout.jks'))) {
+        # ne jamais créer une nouvelle clé alors que l'ancienne existe : l'appli installée ne pourrait plus être mise à jour
+        Fail "La clé de signature est restée dans $oldDataDir\android-signing : déplacez ce dossier dans $dataDir puis relancez."
+    }
     $keystore = Join-Path $signDir 'passe-partout.jks'
     $propsFile = Join-Path $signDir 'signing.properties'
     if (-not (Test-Path $keystore)) {

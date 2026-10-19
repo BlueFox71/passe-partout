@@ -1,7 +1,7 @@
 node_modules/
 www/shared/
 dist/
-# Signature : la clé et son mot de passe vivent hors dépôt (%APPDATA%\GestionnaireMdp\android-signing)
+# Signature : la clé et son mot de passe vivent hors dépôt (%APPDATA%\PassePartout\android-signing)
 *.jks
 *.keystore
 signing.properties

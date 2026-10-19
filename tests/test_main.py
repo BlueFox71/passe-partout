@@ -1,4 +1,27 @@
-from app.main import configure_webview_env, window_geometry
+from app.main import configure_webview_env, default_data_dir, window_geometry
+
+
+def test_dossier_de_donnees_renomme(tmp_path):
+    (tmp_path / "GestionnaireMdp" / "backups").mkdir(parents=True)
+    (tmp_path / "GestionnaireMdp" / "vault.json").write_text("coffre")
+    d = default_data_dir(tmp_path)
+    assert d == tmp_path / "PassePartout"
+    assert (d / "vault.json").read_text() == "coffre" and (d / "backups").is_dir()
+    assert not (tmp_path / "GestionnaireMdp").exists()
+
+
+def test_dossier_de_donnees_nouveau_garde_si_les_deux_existent(tmp_path):
+    (tmp_path / "GestionnaireMdp").mkdir()
+    (tmp_path / "GestionnaireMdp" / "vault.json").write_text("ancien")
+    (tmp_path / "PassePartout").mkdir()
+    (tmp_path / "PassePartout" / "vault.json").write_text("nouveau")
+    d = default_data_dir(tmp_path)
+    assert (d / "vault.json").read_text() == "nouveau"
+    assert (tmp_path / "GestionnaireMdp" / "vault.json").read_text() == "ancien"  # rien n'est écrasé ni effacé
+
+
+def test_dossier_de_donnees_premier_lancement(tmp_path):
+    assert default_data_dir(tmp_path) == tmp_path / "PassePartout"
 
 
 def test_gpu_desactive_pour_webview2(monkeypatch):

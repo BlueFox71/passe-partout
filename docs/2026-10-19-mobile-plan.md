@@ -20,7 +20,7 @@
 - QR : `{"v":1,"hosts":[IP…],"port":N,"key":<base64url>,"pc":"<nom du PC>"}`.
 - Pierres tombales `{"kind":"account"|"giftcard"|"profile","id","at"}` gardées **180 jours** ; téléphone non synchronisé depuis plus de 180 jours → remplacement avec avertissement.
 - Téléphone : PBKDF2-SHA256 **≥ 600 000** itérations ; verrouillage après **30 s** en arrière-plan et **5 min** d'inactivité par défaut ; presse-papiers vidé **30 s** après copie d'un secret (PC seulement : sur le téléphone, plus d'effacement automatique, choix de Jules du 19/10/2026) ; délai croissant après codes faux `min(2^(n-1), 300)` s conservé au redémarrage.
-- Paquet Android `fr.passepartout.app`, minSdk **28** (Android 9), APK `mobile/dist/passe-partout.apk`, clé de signature dans `%APPDATA%\GestionnaireMdp\android-signing\` (jamais dans le dépôt).
+- Paquet Android `fr.passepartout.app`, minSdk **28** (Android 9), APK `mobile/dist/passe-partout.apk`, clé de signature dans `%APPDATA%\PassePartout\android-signing\` (jamais dans le dépôt).
 - Les réglages (`settings`) et le registre `sync` ne sont jamais envoyés au téléphone.
 
 **Écarts assumés par rapport au spec** (à signaler à Jules dans le résumé final) :
@@ -389,7 +389,7 @@ Fenêtre (via `PP.modal`) : titre « Synchroniser le téléphone », QR sur fond
 - [ ] **Step 3: Créer le projet** : `npm init`, installer `@capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/preferences @capacitor/filesystem @capacitor/device @capacitor/barcode-scanner` (versions exactes figées par `package-lock.json`) ; `capacitor.config.json` = `{"appId":"fr.passepartout.app","appName":"Passe-Partout","webDir":"www"}` ; `npx cap add android` ; `minSdkVersion = 28` dans `android/variables.gradle` ; `network_security_config.xml` autorisant le trafic en clair (corps déjà chiffrés AES-GCM ; commentaire l'expliquant) et référencé dans le manifeste ; permissions `CAMERA`, `USE_BIOMETRIC`.
 - [ ] **Step 4: Page de démarrage** : `www/index.html` charge `shared/style.css`, `mobile.css`, `shared/logos.js`, `shared/app.js` et affiche `PP.brand()` sur le fond néon (pas d'appel à `PP.start`).
 - [ ] **Step 5: Icône** : `tools/make_icon.py --android` écrit `mobile/resources/icon-foreground.png` (1024 px, clé dans la zone sûre de 66 %) et `icon-background.png` (`#0b0716`) ; `npx @capacitor/assets generate --android`.
-- [ ] **Step 6: `mobile/build.ps1`** : `npm run assemble` ; `npx cap sync android` ; au premier lancement, crée `%APPDATA%\GestionnaireMdp\android-signing\passe-partout.jks` (keytool, mot de passe aléatoire écrit dans `signing.properties` du même dossier) ; `android\gradlew.bat assembleRelease` avec la configuration de signature lue depuis ce fichier ; copie l'APK vers `mobile/dist/passe-partout.apk`.
+- [ ] **Step 6: `mobile/build.ps1`** : `npm run assemble` ; `npx cap sync android` ; au premier lancement, crée `%APPDATA%\PassePartout\android-signing\passe-partout.jks` (keytool, mot de passe aléatoire écrit dans `signing.properties` du même dossier) ; `android\gradlew.bat assembleRelease` avec la configuration de signature lue depuis ce fichier ; copie l'APK vers `mobile/dist/passe-partout.apk`.
 - [ ] **Step 7: Vérifier** : `powershell -File mobile\build.ps1` → l'APK existe ; installé sur le téléphone de Jules (câble + `adb install -r`, ou copie du fichier), l'appli s'ouvre avec l'icône clé et le logo néon. `git status` ne montre ni `.jks` ni `signing.properties`.
 - [ ] **Step 8: Commit** `feat(mobile): squelette Capacitor Android, icône, construction de l'APK signé`
 
