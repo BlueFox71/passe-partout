@@ -7,20 +7,10 @@
     <path d="M20.6 16.5c-.2 1.3-.5 2.5-.9 3.7"/></svg>`;
   const MIN_CHECK_MS = 700; // l'animation de vérification reste visible au moins ce temps
 
-  let code = "";
   let waitTimer = null;
-  let press = null; // pavé PIN affiché actuellement (null sinon)
   let forced = null; // « pin » ou « password » choisi par la bascule, sinon le mode enregistré
   let bioTried = false; // empreinte déjà proposée automatiquement pour cet écran
   let renderSeq = 0; // jeton d'affichage : une vérification lancée par un écran remplacé est ignorée
-
-  // Un seul écouteur clavier (aperçu sur ordinateur) : réafficher l'écran ne doit pas doubler les touches.
-  window.addEventListener("keydown", (e) => {
-    if (!press || !document.getElementById("dots")) return;
-    if (/^[0-9]$/.test(e.key)) press(e.key);
-    else if (e.key === "Backspace") press("del");
-    else if (e.key === "Enter") { e.preventDefault(); press("ok"); }
-  });
 
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -49,8 +39,7 @@
   function render() {
     const token = ++renderSeq;
     const live = () => token === renderSeq;
-    code = "";
-    press = null;
+    PP.pinPad.release();
     clearInterval(waitTimer);
     const s = PP.state;
     const mode = modeOf(s);
@@ -64,14 +53,10 @@
         <div class="lock-card m-lock-card">
           <div class="lock-ok">${PP.icon.check}</div>
           <div class="m-prompt">${prompt}</div>
-          ${isPin
-            ? `<div class="pin-dots" id="dots"></div>
-               <div class="pin-pad m-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" data-k="${n}">${n}</button>`).join("")}
-                 <button type="button" data-k="del" aria-label="Effacer">⌫</button><button type="button" data-k="0">0</button>
-                 <button type="button" data-k="ok" aria-label="Valider" class="m-ok">✓</button></div>`
-            : `<input id="pw" class="input m-pw" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
-                 placeholder="${mode === "password" ? "Mot de passe" : "Code PIN ou mot de passe"}">
-               <button type="button" class="btn btn-primary m-wide" id="go">Déverrouiller</button>`}
+          ${PP.pinPad.markup({
+            pin: isPin, button: "Déverrouiller",
+            placeholder: mode === "password" ? "Mot de passe" : "Code PIN ou mot de passe",
+          })}
           <div class="m-check" id="check">Vérification…</div>
           <div class="err m-err" id="err"></div>
           ${isPin && !pinLength ? `<div class="hint m-center">Valide avec ✓ : ensuite, le code se validera tout seul.</div>` : ""}
@@ -121,18 +106,15 @@
     };
 
     const failed = (r) => {
-      code = "";
-      drawDots();
+      input.clear();
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
       // error « wait » : délai en cours, code non essayé ; « bad_code » : code essayé et faux
       startWait(r.wait_seconds, r.error !== "wait");
-      const pw = app.querySelector("#pw");
-      if (pw) { pw.value = ""; pw.focus(); }
     };
 
     const opened = async () => {
       PP.state.locked = false;
-      press = null;
+      PP.pinPad.release();
       clearInterval(waitTimer);
       card.classList.add("unlocked"); // coche verte, puis ouverture du coffre
       await sleep(380);
@@ -156,41 +138,14 @@
       if (!live()) return; // écran remplacé entre-temps (verrouillage, nouvel affichage)
       setBusy(false);
       card.classList.remove("checking");
-      if (!r) { code = ""; drawDots(); return; }
+      if (!r) { input.clear({ field: false }); return; }
       if (r.ok) return opened();
       if (r.error === "corrupt") return PP.route();
       failed(r);
     };
 
-    const drawDots = () => {
-      const d = app.querySelector("#dots");
-      if (!d) return;
-      // longueur inconnue : seulement les chiffres tapés (pas de cases vides qui suggéreraient une longueur)
-      const n = pinLength || code.length;
-      d.innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < code.length ? "f" : ""}"></i>`).join("");
-    };
-
-    if (isPin) {
-      drawDots();
-      press = (k) => {
-        if (busy || waiting) return;
-        if (k === "del") code = code.slice(0, -1);
-        else if (k === "ok") return submit(code);
-        else if (code.length < (pinLength || 12)) code += k;
-        drawDots();
-        if (pinLength && code.length === pinLength) submit(code);
-      };
-      app.querySelectorAll("[data-k]").forEach((b) => {
-        b.tabIndex = -1;
-        b.addEventListener("mousedown", (e) => e.preventDefault()); // pas de focus : Entrée ne « reclique » pas
-        b.addEventListener("click", () => press(b.dataset.k));
-      });
-    } else {
-      const pw = app.querySelector("#pw");
-      pw.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(pw.value); });
-      app.querySelector("#go").addEventListener("click", () => submit(pw.value));
-      if (!bio) pw.focus();
-    }
+    const input = PP.pinPad.bind(app, { pinLength, onSubmit: submit, blocked: () => busy || waiting });
+    if (!isPin && !bio) app.querySelector("#pw").focus();
 
     // Empreinte : bouton, et proposée automatiquement une fois à l'affichage.
     const fp = app.querySelector("#fp");

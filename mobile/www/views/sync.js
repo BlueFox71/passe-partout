@@ -12,16 +12,7 @@
   let container = null; // conteneur de l'onglet, ou null en plein écran
   let seq = 0; // jeton d'affichage : une étape lancée par un écran remplacé s'arrête
   let pending = null; // client dont le hello a réussi mais sans sync aboutie (à annuler si on quitte)
-  let pressPin = null; // pavé PIN affiché (null sinon)
   let waitTimer = null;
-
-  // Clavier de l'aperçu sur ordinateur, comme l'écran de verrouillage (un seul écouteur).
-  window.addEventListener("keydown", (e) => {
-    if (!pressPin || !document.getElementById("sdots")) return;
-    if (/^[0-9]$/.test(e.key)) pressPin(e.key);
-    else if (e.key === "Backspace") pressPin("del");
-    else if (e.key === "Enter") { e.preventDefault(); pressPin("ok"); }
-  });
 
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
   const esc = (s) => PP.esc(String(s ?? ""));
@@ -41,7 +32,7 @@
 
   function stop() {
     seq++;
-    pressPin = null;
+    PP.pinPad.release();
     clearInterval(waitTimer);
   }
 
@@ -191,21 +182,18 @@
   function codeScreen(ctx) {
     const { hello, info } = ctx;
     ctx.onCodeScreen = true;
-    const pinLength = Number(hello.pin_length) || 0;
-    const isPin = hello.lock_mode === "pin";
+    // comme l'écran de verrouillage : pavé seulement si la longueur du PIN est connue, sinon champ libre
+    const pinLength = hello.lock_mode === "pin" ? Number(hello.pin_length) || 0 : 0;
+    const isPin = pinLength > 0;
     const prompt = info.has_data ? "Le code du PC a changé : saisis le nouveau code" : "Saisis le code du PC";
     const { el, live } = paint(`
       <div class="lock-card m-lock-card m-sync-code">
         <h2>${esc(hello.pc)}</h2>
         <div class="m-prompt">${prompt}</div>
-        ${isPin
-          ? `<div class="pin-dots" id="sdots"></div>
-             <div class="pin-pad m-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" data-k="${n}">${n}</button>`).join("")}
-               <button type="button" data-k="del" aria-label="Effacer">⌫</button><button type="button" data-k="0">0</button>
-               <button type="button" data-k="ok" aria-label="Valider" class="m-ok">✓</button></div>`
-          : `<input id="pw" class="input m-pw" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
-               placeholder="${hello.lock_mode === "password" ? "Mot de passe du PC" : "Code PIN ou mot de passe du PC"}">
-             <button type="button" class="btn btn-primary m-wide" id="go">Valider</button>`}
+        ${PP.pinPad.markup({
+          pin: isPin, button: "Valider",
+          placeholder: hello.lock_mode === "password" ? "Mot de passe du PC" : "Code PIN ou mot de passe du PC",
+        })}
         <div class="m-check">Vérification…</div>
         <div class="err m-err" id="err"></div>
       </div>
@@ -213,7 +201,6 @@
     const card = el.querySelector(".lock-card");
     const err = el.querySelector("#err");
     const cancelBtn = el.querySelector("#cancel");
-    let code = "";
     let busy = false;
     let waiting = false;
 
@@ -223,17 +210,9 @@
       startScreen();
     });
 
-    const drawDots = () => {
-      const d = el.querySelector("#sdots");
-      if (!d) return;
-      const n = pinLength || code.length; // longueur inconnue : seulement les chiffres tapés
-      d.innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < code.length ? "f" : ""}"></i>`).join("");
-    };
-
     // Erreur du PC : message tel quel, puis « Réessaie dans N s » tant que le délai court.
     const showError = (reply) => {
-      code = "";
-      drawDots();
+      input.clear({ field: false });
       const pw = el.querySelector("#pw");
       if (pw) pw.value = "";
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
@@ -277,27 +256,8 @@
       showError(reply);
     };
 
-    if (isPin) {
-      drawDots();
-      pressPin = (k) => {
-        if (busy || waiting) return;
-        if (k === "del") code = code.slice(0, -1);
-        else if (k === "ok") return submit(code);
-        else if (code.length < (pinLength || 12)) code += k;
-        drawDots();
-        if (pinLength && code.length === pinLength) submit(code);
-      };
-      el.querySelectorAll("[data-k]").forEach((b) => {
-        b.tabIndex = -1;
-        b.addEventListener("mousedown", (e) => e.preventDefault());
-        b.addEventListener("click", () => pressPin && pressPin(b.dataset.k));
-      });
-    } else {
-      const pw = el.querySelector("#pw");
-      pw.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(pw.value); });
-      el.querySelector("#go").addEventListener("click", () => submit(pw.value));
-      pw.focus();
-    }
+    const input = PP.pinPad.bind(el, { pinLength, onSubmit: submit, blocked: () => busy || waiting });
+    if (!isPin) el.querySelector("#pw").focus();
   }
 
   // ------------------------------------------------------------ résumé
