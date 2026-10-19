@@ -3,6 +3,9 @@
   const V = (PP.views.sync = {});
   let timer = null;     // interrogation de l'état
   let token = 0;        // invalide les réponses d'une fenêtre déjà fermée
+  let opening = false;  // un sync_start est en cours : on ignore les clics répétés
+  let winOpen = false;  // la fenêtre de synchro est affichée
+  let stopping = Promise.resolve(); // dernier sync_stop envoyé
 
   const mmss = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
   const plural = (n, one, many) => `${n} ${n > 1 ? many : one}`;
@@ -20,8 +23,19 @@
   }
 
   V.open = async () => {
-    let start;
-    try { start = await PP.call("sync_start"); } catch (e) { return; } // l'erreur est déjà affichée
+    if (opening) return;
+    opening = true;
+    try {
+      // Ferme l'ancienne fenêtre (Relancer) et attend son sync_stop avant de démarrer une nouvelle session.
+      if (winOpen) PP.modal.close();
+      await stopping;
+      let start;
+      try { start = await PP.call("sync_start"); } catch (e) { return; } // l'erreur est déjà affichée
+      show(start);
+    } finally { opening = false; }
+  };
+
+  function show(start) {
     stopPolling();
     const my = token;
     const m = PP.modal.open(`
@@ -36,7 +50,12 @@
       </div>
       <div class="modal-foot"><button class="btn btn-primary" id="sy-retry" style="display:none">Relancer</button>
         <button class="btn btn-ghost" id="sy-close">Fermer</button></div>`,
-      { cls: "sm", onClose: () => { stopPolling(); try { Promise.resolve(PP.api.sync_stop()).catch(() => {}); } catch (e) {} } });
+      { cls: "sm", onClose: () => {
+        stopPolling();
+        winOpen = false;
+        try { stopping = Promise.resolve(PP.api.sync_stop()).catch(() => {}); } catch (e) {}
+      } });
+    winOpen = true;
 
     const $ = (s) => m.querySelector(s);
     $("#sy-close").addEventListener("click", () => PP.modal.close());
@@ -76,7 +95,7 @@
     set("", "En attente du téléphone…");
     $("#sy-count").textContent = mmss(start.seconds || 120);
     timer = setTimeout(tick, 500);
-  };
+  }
 
   /* ---------- carte « Téléphones » des Réglages ---------- */
   const when = (iso) => {
