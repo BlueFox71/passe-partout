@@ -7,7 +7,7 @@ forme {"ok": False, "error": <code>, "message": <texte>} ; aucun code ni mot de 
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 from app.lockout import Lockout
@@ -58,15 +58,34 @@ def _date(v, what: str) -> datetime:
         dt = datetime.fromisoformat(v)
     except ValueError:
         _invalid(what)
-    if dt.tzinfo is not None:
+    # forme canonique exigée : la fusion compare ces dates comme des chaînes
+    if dt.tzinfo is not None or dt.isoformat(timespec="seconds") != v:
         _invalid(what)
     return dt
 
 
-def _amount(v, what: str, *, positive=False) -> float:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 or (positive and v == 0):
+def _day(v, what: str) -> None:
+    """Date de dépense : exactement AAAA-MM-JJ (triée comme une chaîne par la fusion)."""
+    if not isinstance(v, str):
         _invalid(what)
-    return float(v)
+    try:
+        ok = date.fromisoformat(v).isoformat() == v
+    except ValueError:
+        ok = False
+    if not ok:
+        _invalid(what)
+
+
+def _amount(v, what: str, *, positive=False) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        _invalid(what)
+    try:
+        f = float(v)  # un entier JSON immense lève OverflowError
+    except OverflowError:
+        _invalid(what)
+    if not math.isfinite(f) or f < 0 or (positive and f == 0):
+        _invalid(what)
+    return f
 
 
 def _image(d: dict, key: str) -> None:
@@ -128,7 +147,7 @@ def validate_phone_vault(d: dict) -> Vault:
             if not isinstance(h, dict):
                 _invalid("history")
             _str(h, "id", required=True, nonempty=True)
-            _str(h, "date", required=True)
+            _day(h.get("date"), "date")
             _amount(h.get("amount"), "amount", positive=True)
         giftcards.append(g)
     for t in d["deleted"]:
@@ -216,6 +235,8 @@ class SyncFlow:
 
     # ------------------------------------------------------------ hello
     def _on_hello(self, msg: dict) -> dict:
+        if self._hello is not None:
+            raise _Refused("invalid")  # un seul hello par session : sinon on pourrait sonder la version du code
         device_id = _str(msg, "device_id", required=True, nonempty=True)
         device_name = _str(msg, "device_name", required=True)
         generation = msg.get("generation")
@@ -229,7 +250,9 @@ class SyncFlow:
         now = self._check_clock(msg)
         self._check_store()
 
-        need_code = code_version != self._store.code_version()
+        # appareil inconnu (jamais vu ou « oublié ») ou code changé sur le PC → le code est exigé
+        known = device_id in self._store.vault.sync.get("devices", {})
+        need_code = not known or code_version != self._store.code_version()
         if not has_data:
             mode, reason = "replace", "first"
         elif generation != self._generation():
@@ -238,12 +261,15 @@ class SyncFlow:
             mode, reason = "replace", "stale"
         else:
             mode, reason = "merge", None
-        self._hello = {"device_id": device_id, "need_code": need_code, "mode": mode}
+        self._hello = {"device_id": device_id, "need_code": need_code, "mode": mode, "last_sync": last_sync}
         self.device_name = device_name
         lock_mode, pin_length = self._lock_info()
-        return {"ok": True, "pc": self._pc_name, "lock_mode": lock_mode, "pin_length": pin_length,
-                "code_version": self._store.code_version(), "need_code": need_code, "mode": mode,
-                "reason": reason, "since": last_sync}
+        reply = {"ok": True, "pc": self._pc_name, "lock_mode": lock_mode, "pin_length": pin_length,
+                 "need_code": need_code, "mode": mode, "reason": reason, "since": last_sync}
+        if not need_code:
+            # sinon la version du code n'est donnée qu'après vérification du code (réponse de sync)
+            reply["code_version"] = self._store.code_version()
+        return reply
 
     # ------------------------------------------------------------ sync
     def _check_code(self, code) -> None:
@@ -271,6 +297,8 @@ class SyncFlow:
         if not isinstance(replace, bool) or replace != (hello["mode"] == "replace"):
             _invalid("replace")
         last_sync = self._last_sync(msg)
+        if last_sync != hello["last_sync"]:
+            _invalid("last_sync")
         now = self._check_clock(msg)
         self._check_store()
         phone = None if replace else validate_phone_vault(msg.get("vault"))

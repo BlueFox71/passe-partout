@@ -21,6 +21,8 @@ class Env:
     def __init__(self, tmp_path, encrypted=True):
         self.store = VaultStore(tmp_path / "vault.json")
         self.store.vault = sample_vault()
+        # téléphone déjà appairé : dev1 est dans le registre des appareils
+        self.store.vault.sync["devices"]["dev1"] = {"name": "Pixel", "last_sync": iso(NOW - timedelta(days=1))}
         if encrypted:
             self.store.set_lock(CODE)
         else:
@@ -85,16 +87,18 @@ def test_verify_code_and_code_version(env):
 
 # ---------------------------------------------------------------- hello
 def test_hello_first_sync_needs_code_and_replace(env):
-    r = env.flow().handle(hello_msg(code_version=None, has_data=False, last_sync=None, generation=None))
+    r = env.flow().handle(hello_msg(device_id="neuf", code_version=None, has_data=False, last_sync=None,
+                                    generation=None))
     assert r["ok"] is True
     assert r["need_code"] is True and r["mode"] == "replace" and r["reason"] == "first"
     assert r["pc"] == "PC-Jules" and r["lock_mode"] == "pin" and r["pin_length"] == 6
-    assert r["code_version"] == env.store.code_version()
+    assert "code_version" not in r
 
 
 def test_hello_known_device_merges(env):
     r = env.flow().handle(hello_msg(env))
     assert r["ok"] and r["mode"] == "merge" and r["reason"] is None and r["need_code"] is False
+    assert r["code_version"] == env.store.code_version()
 
 
 def test_hello_after_restore_is_replace_restored(env):
@@ -218,9 +222,12 @@ def test_sync_replace_returns_pc_vault(env):
 
 def test_sync_replace_without_vault(env):
     flow = env.flow()
-    flow.handle(hello_msg(code_version=None, has_data=False, last_sync=None, generation=None))
-    r = flow.handle({k: v for k, v in sync_msg(replace=True, code=CODE, last_sync=None).items() if k != "vault"})
+    flow.handle(hello_msg(device_id="neuf", code_version=None, has_data=False, last_sync=None, generation=None))
+    r = flow.handle({k: v for k, v in sync_msg(device_id="neuf", replace=True, code=CODE, last_sync=None).items()
+                     if k != "vault"})
     assert r["ok"] is True and len(r["vault"]["accounts"]) == 2
+    assert r["code_version"] == env.store.code_version()
+    assert "neuf" in VaultStore(env.store.path).load(CODE).sync["devices"]
 
 
 def test_sync_response_has_no_settings_or_sync(env):
@@ -295,3 +302,87 @@ def test_validate_phone_vault_accepts():
     v = validate_phone_vault(d)
     assert isinstance(v, Vault) and len(v.accounts) == 2 and v.giftcards[0].history[0]["id"] == "h1"
     assert validate_phone_vault(d) is not None and d["accounts"][0]["image"].startswith("data:")
+
+
+# ---------------------------------------------------------------- corrections (revue)
+def test_second_hello_rejected(env):
+    flow = known(env)
+    r = flow.handle(hello_msg(env))
+    assert r["ok"] is False and r["error"] == "invalid"
+
+
+def test_hello_hides_code_version_when_code_needed(env):
+    r = env.flow().handle(hello_msg(code_version=None))
+    assert r["ok"] is True and r["need_code"] is True and "code_version" not in r
+    assert env.store.code_version() not in json.dumps(r)
+
+
+def test_unknown_device_needs_code_even_with_right_code_version(env):
+    r = env.flow().handle(hello_msg(env, device_id="oublie"))  # bonne version du code, appareil oublié
+    assert r["need_code"] is True and "code_version" not in r
+
+
+@pytest.mark.parametrize("device_id", ["dev1", "inconnu"])
+def test_bypass_attempt_without_code_fails(env, device_id):
+    before = env.store.path.read_bytes()
+    flow = env.flow()
+    r = flow.handle(hello_msg(device_id=device_id, code_version=None))
+    assert r["need_code"] is True and "code_version" not in r
+    r = flow.handle(hello_msg(device_id=device_id, code_version=env.store.code_version()))
+    assert r["ok"] is False and r["error"] == "invalid"
+    for msg in (sync_msg(device_id=device_id, replace=True, code=None),
+                sync_msg(device_id=device_id, replace=False, code=None)):
+        r = flow.handle(msg)
+        assert r["ok"] is False and r["error"] in ("invalid", "code_required")
+        assert "vault" not in r
+    assert env.store.path.read_bytes() == before
+
+
+def test_huge_amount_is_invalid(env):
+    flow = known(env)
+    before = env.store.path.read_bytes()
+    for mutate in (lambda g: g.__setitem__("remaining", 10**400),
+                   lambda g: g.__setitem__("history", [{"id": "h", "date": "2026-10-01", "amount": 10**400}])):
+        pv = phone_vault()
+        mutate(pv["giftcards"][0])
+        r = flow.handle(sync_msg(vault=pv))
+        assert r["ok"] is False and r["error"] == "invalid"
+    assert env.store.path.read_bytes() == before
+
+
+BAD_DATES = ["20261019", "2026-W42-1", "2026-10-19", "2026-10-19 12:00:00", "2026-10-19T12:00:00.123456",
+             "2026-10-19T12:00", "2026-10-19T12:00:00+00:00"]
+
+
+@pytest.mark.parametrize("bad", BAD_DATES)
+def test_non_canonical_dates_invalid(env, bad):
+    flow = known(env)
+    before = env.store.path.read_bytes()
+    pv = phone_vault()
+    pv["accounts"][0]["updated"] = bad
+    assert flow.handle(sync_msg(vault=pv))["error"] == "invalid"
+    pv = phone_vault(deleted=[{"kind": "account", "id": "x", "at": bad}])
+    assert flow.handle(sync_msg(vault=pv))["error"] == "invalid"
+    assert flow.handle(sync_msg(now=bad))["error"] == "invalid"
+    assert flow.handle(sync_msg(last_sync=bad))["error"] == "invalid"
+    assert env.store.path.read_bytes() == before
+    assert env.flow().handle(hello_msg(env, now=bad))["error"] == "invalid"
+    assert env.flow().handle(hello_msg(env, last_sync=bad))["error"] == "invalid"
+
+
+@pytest.mark.parametrize("bad", ["2026-10-1", "20261001", "2026-10-01T00:00:00", 20261001])
+def test_non_canonical_history_date_invalid(bad):
+    d = phone_vault()
+    d["giftcards"][0]["history"] = [{"id": "h", "date": bad, "amount": 5}]
+    with pytest.raises(ValueError):
+        validate_phone_vault(d)
+
+
+def test_last_sync_must_match_hello(env):
+    flow = known(env)
+    before = env.store.path.read_bytes()
+    for other in (iso(NOW - timedelta(days=2)), None):
+        r = flow.handle(sync_msg(last_sync=other))
+        assert r["ok"] is False and r["error"] == "invalid"
+    assert env.store.path.read_bytes() == before
+    assert flow.handle(sync_msg())["ok"] is True
