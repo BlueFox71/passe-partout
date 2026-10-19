@@ -45,8 +45,15 @@ def _json_compact(obj: dict) -> bytes:
 def seal(key: bytes, obj: dict, aad: bytes, nonce: bytes | None = None) -> bytes:
     if nonce is None:
         nonce = os.urandom(12)
-    ct = AESGCM(key).encrypt(nonce, _json_compact(obj), aad)
-    return json.dumps({"n": b64u(nonce), "c": b64u(ct)}, separators=(",", ":")).encode("ascii")
+    plain = _json_compact(obj)
+    ct = AESGCM(key).encrypt(nonce, plain, aad)
+    del plain
+    # enveloppe assemblée en octets (même texte que json.dumps compact) : la réponse « apk » pèse ~20 Mo,
+    # on évite les copies str ↔ bytes et la sérialisation JSON d'une chaîne géante
+    c = base64.urlsafe_b64encode(ct)
+    del ct
+    end = len(c) - c[-2:].count(b"=")  # base64url sans remplissage, sans recopier c
+    return b"".join((b'{"n":"', b64u(nonce).encode("ascii"), b'","c":"', memoryview(c)[:end], b'"}'))
 
 
 def open_sealed(key: bytes, body: bytes, aad: bytes) -> tuple[dict, bytes]:

@@ -258,3 +258,15 @@ def test_qr_svg_contains_svg():
     svg = sync.qr_svg({"v": 1, "hosts": ["192.168.1.20"], "port": 50123, "key": "k" * 43, "pc": "PC-Jules"})
     assert "<svg" in svg and "</svg>" in svg
     assert "<?xml" not in svg
+
+
+@pytest.mark.parametrize("size", [0, 1, 2, 3, 100, 3 * 1024 * 1024 + 1])
+def test_seal_envelope_is_compact_json_without_padding(size):
+    """L'enveloppe assemblée en octets est exactement le JSON compact d'avant (réponse « apk » de ~20 Mo)."""
+    key, nonce = bytes(32), bytes(range(12))
+    obj = {"ok": True, "apk": "x" * size}
+    body = seal(key, obj, AAD_RESP, nonce)
+    d = json.loads(body)
+    assert list(d) == ["n", "c"] and "=" not in d["c"] and "=" not in d["n"]
+    assert body == json.dumps({"n": d["n"], "c": d["c"]}, separators=(",", ":")).encode("ascii")
+    assert open_sealed(key, body, AAD_RESP) == (obj, nonce)

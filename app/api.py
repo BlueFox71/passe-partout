@@ -642,7 +642,9 @@ class Api:
             except Exception:
                 run.error = "Erreur inattendue pendant la synchronisation."
                 raise
-            if reply.get("ok") is False:
+            if reply.get("error") == "update_required":
+                run.error = None  # pas une erreur côté PC : l'écran l'indique par flow.notice
+            elif reply.get("ok") is False:
                 run.error = reply.get("message")
             elif msg.get("type") == "sync":
                 run.error = None
@@ -672,7 +674,7 @@ class Api:
         pc_name = os.environ.get("COMPUTERNAME") or socket.gethostname()
         key = os.urandom(32)
         flow = SyncFlow(self._store, self._lockout, self._persist_lockout, lambda: self._config, pc_name,
-                        qr_key=key)
+                        qr_key=key, apk_provider=lambda: apk_mod.find_apk())
         run = _SyncRun(flow, self._clock() + SYNC_SECONDS)
         run.session = SyncSession(key, lambda msg: self._on_sync_message(run, msg), run.deadline, self._clock)
         run.server = self._sync_server(run.session)
@@ -688,11 +690,12 @@ class Api:
         with self._mutex:
             run = self._sync
             if run is None:
-                return {"state": "closed", "seconds_left": 0, "device": None, "summary": None, "error": None}
+                return {"state": "closed", "seconds_left": 0, "device": None, "summary": None, "error": None,
+                        "notice": None}
             state = run.session.status  # lu sans le verrou de session
             left = max(0, math.ceil(run.deadline - self._clock())) if state in ("waiting", "syncing") else 0
             out = {"state": state, "seconds_left": left, "device": run.flow.device_name,
-                   "summary": run.flow.summary, "error": run.error}
+                   "summary": run.flow.summary, "error": run.error, "notice": run.flow.notice}
             server = None
             if state not in ("waiting", "syncing"):
                 server, run.server = run.server, None  # usage unique : plus rien à servir

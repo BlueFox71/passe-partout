@@ -1,4 +1,6 @@
 """Synchro de bout en bout : vraie Api, vrai SyncServer sur 127.0.0.1, coffre chiffré, faux téléphone en HTTP."""
+import hashlib
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -7,10 +9,12 @@ from datetime import datetime, timedelta
 import pytest
 
 from app import api as api_mod
+from app import apk as apk_mod
 from app.api import Api
 from app.store import VaultStore
 from app.sync import AAD_REQ, AAD_RESP, SyncServer, open_sealed, seal, unb64u
 from app.syncflow import PROOF_PC, PROOF_PHONE, pair_proof
+from app.version import VERSION
 
 CODE = "123456"
 NEW_CODE = "987654"
@@ -41,6 +45,7 @@ class Phone:
         self.meta = {"generation": None, "last_sync": None, "code_version": None}
         self.vault = None
         self.pair = None  # secret d'appairage reçu à la 1re synchro avec code (Ruling 21)
+        self.app_version = VERSION
 
     def _post(self, msg):
         p = self.pc.qr[-1]
@@ -57,7 +62,7 @@ class Phone:
 
     def hello(self):
         msg = {"type": "hello", "device_id": self.device_id, "device_name": self.name, **self.meta,
-               "has_data": self.vault is not None, "now": _iso(datetime.now())}
+               "has_data": self.vault is not None, "now": _iso(datetime.now()), "app_version": self.app_version}
         key = unb64u(self.pc.qr[-1]["key"])
         if self.pair:
             msg["proof"] = pair_proof(self.pair, key, PROOF_PHONE)
@@ -225,3 +230,36 @@ def test_session_is_single_use_over_http(pc):
                      "last_sync": None, "now": _iso(datetime.now()), "code": CODE})
     assert r["ok"] and pc.api.sync_status()["state"] == "done"
     assert pc.api._sync.session.handle(b"rejeu")[0] == 410  # usage unique : plus rien n'est accepté
+
+
+def test_old_phone_gets_apk_over_http(pc, tmp_path, monkeypatch):
+    """Un téléphone 0.9.0 ne peut pas synchroniser : il reçoit l'APK dans la session chiffrée, puis met à jour."""
+    data = b"PK" + os.urandom(11 * 1024 * 1024)  # taille réelle de l'APK (~11 Mo, réponse ~20 Mo)
+    apk = tmp_path / "embarque.apk"
+    apk.write_bytes(data)
+    monkeypatch.setattr(apk_mod, "APK_OVERRIDE", apk)
+    phone = Phone(pc, "dev-a", "Pixel A")
+    phone.app_version = "0.9.0"
+    pc.api.sync_start()
+    try:
+        h = phone.hello()
+        assert h["error"] == "update_required" and h["current"] == "0.9.0" and h["available"] == VERSION
+        assert h["size"] == len(data) and h["sha256"] == hashlib.sha256(data).hexdigest()
+        assert "proof_pc" not in h and "code_version" not in h and "vault" not in h
+        assert "doit être mis à jour" in pc.api.sync_status()["notice"]
+        r = phone._post({"type": "sync", "device_id": "dev-a", "device_name": "Pixel A", "replace": True,
+                         "last_sync": None, "now": _iso(datetime.now()), "code": CODE})
+        assert r["error"] == "invalid" and "vault" not in r
+        r = phone._post({"type": "apk"})
+        assert r["ok"] and r["version"] == VERSION
+        got = unb64u(r["apk"])
+        assert got == data and hashlib.sha256(got).hexdigest() == r["sha256"] == h["sha256"]
+        assert pc.api.sync_status()["notice"] == "✓ Appli envoyée au téléphone de Pixel A"
+        assert phone._post({"type": "cancel"})["ok"]
+        assert pc.api.sync_status()["state"] == "closed"
+    finally:
+        pc.api.sync_stop()
+    # appli mise à jour : synchro normale avec le code
+    phone.app_version = VERSION
+    h, r = phone.sync(CODE)
+    assert r["ok"] and h["reason"] == "first"
