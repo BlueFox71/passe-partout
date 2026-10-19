@@ -5,8 +5,10 @@
 // localStorage (getItem/setItem/removeItem). Deux instances sur le même `store` partagent fichiers,
 // préférences et clés (simule un redémarrage de l'appli). Sans `store` : localStorage s'il existe,
 // sinon PPM.nativeFake.memoryStore() (mémoire). PPM.nativeFake est lui-même une instance par défaut.
-// Commandes de test : setBiometricError(code|null), setBiometricAvailable(bool), setNextQr(texte),
-// firePause(), fireResume() ; `clipboard` = dernière copie {text, sensitive, seconds}.
+// Commandes de test : setBiometricError(code|null), setUnwrapError(code|null), setBiometricAvailable(bool),
+// setNextQr(texte), firePause(), fireResume(), fireBack() ; `clipboard` = dernière copie {text, sensitive, seconds}.
+// Codes d'erreur de unwrap, comme le natif réel : KEY_MISSING (clé absente ou effacée), BAD_BLOB (blob mal
+// formé ou d'une autre clé), KEY_INVALIDATED, CANCELED, FAILED (erreur passagère).
 // simulatePc({code, vault, lockMode, pinLength, pcName}) : PC simulé (aperçu et tests uniquement) ; scanQr
 // renvoie alors un nouveau QR de ce PC et post() lui répond comme app/syncflow.py (voir simulatedPc).
 (function (root) {
@@ -71,7 +73,9 @@
     store = store || defaultStore();
     const pauseCbs = [];
     const resumeCbs = [];
+    const backCbs = [];
     let bioError = null;
+    let unwrapError = null;
     let bioAvailable = true;
     let nextQr = null;
     let simPc = null;
@@ -103,8 +107,12 @@
       },
 
       async unwrap(alias, blob, { title } = {}) { // eslint-disable-line no-unused-vars
+        if (unwrapError) throw nativeError(unwrapError);
         const p = parseBlob(blob);
-        if (!p || p.alias !== alias || p.keyId !== keyId(alias, false)) throw nativeError("FAILED");
+        if (!p || p.alias !== alias) throw nativeError("BAD_BLOB");
+        const id = keyId(alias, false);
+        if (!id) throw nativeError("KEY_MISSING");
+        if (p.keyId !== id) throw nativeError("BAD_BLOB"); // clé recréée depuis : blob illisible
         if (p.bio && bioError) throw nativeError(bioError);
         return unb64(p.data);
       },
@@ -143,6 +151,13 @@
       onResume(cb) { resumeCbs.push(cb); },
       firePause() { pauseCbs.forEach((cb) => cb()); },
       fireResume() { resumeCbs.forEach((cb) => cb()); },
+      // Bouton retour (Android) : rappels essayés du dernier au premier ; faux si aucun ne l'a traité
+      // (le vrai natif mettrait alors l'appli en arrière-plan).
+      onBack(cb) { backCbs.push(cb); },
+      async fireBack() {
+        for (let i = backCbs.length - 1; i >= 0; i--) if (await backCbs[i]()) return true;
+        return false;
+      },
 
       // Dans le navigateur : texte du QR saisi dans une fenêtre PP.modal ; ailleurs, valeur de setNextQr.
       async scanQr() {
@@ -172,6 +187,7 @@
       },
 
       setBiometricError(code) { bioError = code || null; },
+      setUnwrapError(code) { unwrapError = code || null; },
       setBiometricAvailable(v) { bioAvailable = Boolean(v); },
       setNextQr(text) { nextQr = text == null ? null : String(text); },
       simulatePc(opts) { simPc = simulatedPc(opts); return simPc; },

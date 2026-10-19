@@ -6,6 +6,7 @@
     <path d="M8 12a4 4 0 0 1 8 0c0 2.6-.4 5.2-1.2 7.6"/><path d="M12 12c0 3.2-.6 6.2-1.8 9"/><path d="M7.4 20c.7-1.6 1.1-3.4 1.1-5.3"/>
     <path d="M20.6 16.5c-.2 1.3-.5 2.5-.9 3.7"/></svg>`;
   const MIN_CHECK_MS = 700; // l'animation de vérification reste visible au moins ce temps
+  const NATIVE_MSG = "Erreur de sécurité Android, réessaie."; // erreur passagère du Keystore (error « native »)
 
   let waitTimer = null;
   let forced = null; // « pin » ou « password » choisi par la bascule, sinon le mode enregistré
@@ -141,6 +142,7 @@
       if (!r) { input.clear({ field: false }); return; }
       if (r.ok) return opened();
       if (r.error === "corrupt") return PP.route();
+      if (r.error === "native") { input.clear(); err.textContent = NATIVE_MSG; return; }
       failed(r);
     };
 
@@ -167,7 +169,9 @@
         PP.state.biometric = false;
         PP.toast("Empreinte désactivée : les empreintes du téléphone ont changé. Saisis ton code, puis réactive-la dans Réglages.", { seconds: 6 });
         render();
+        return;
       }
+      if (r.error === "native") err.textContent = NATIVE_MSG;
       // « canceled » : on reste sur l'écran, le bouton permet de réessayer
     };
     if (fp) {

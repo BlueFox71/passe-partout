@@ -171,6 +171,21 @@
     });
   }
 
+  // ---------------------------------------------------------------- bouton retour (Android)
+  // Fenêtre, fiche ou formulaire ouvert → fermé ; autre onglet → Comptes ; sinon (vrai renvoyé par
+  // personne) le natif met l'appli en arrière-plan.
+  if (typeof native.onBack === "function") {
+    native.onBack(() => {
+      if (PP.mui && PP.mui.closeTop()) return true;
+      const shell = PP.views.shell;
+      if (shell && shell.active() && shell.tab() !== "accounts") {
+        shell.show("accounts");
+        return true;
+      }
+      return false;
+    });
+  }
+
   // ---------------------------------------------------------------- aperçu
   function previewBadge() {
     const b = document.createElement("div");

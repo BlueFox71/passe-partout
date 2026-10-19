@@ -46,6 +46,22 @@
     sh.innerHTML = "";
   };
 
+  // Bouton retour d'Android : ferme ce qui est ouvert par-dessus (fenêtre, fiche ou formulaire via son
+  // bouton « Retour » / « Annuler », saisie du code dans Réglages) ; vrai si quelque chose a été fermé.
+  M.closeTop = () => {
+    if (PP.modal.isOpen()) {
+      PP.modal.close();
+      return true;
+    }
+    const back = document.querySelector(".m-sheet:not([hidden]) .m-back")
+      || document.querySelector("#s-code:not([hidden]) #s-cancel");
+    if (back) {
+      back.click();
+      return true;
+    }
+    return false;
+  };
+
   M.profileNames = (item) =>
     (S.profiles || []).filter((p) => (item.profiles || []).includes(p.id)).map((p) => p.name);
 

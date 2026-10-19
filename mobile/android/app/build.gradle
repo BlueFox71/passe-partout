@@ -66,6 +66,11 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // Plugin natif PassePartoutPlugin : empreinte (BiometricPrompt + CryptoObject) et lecture du QR code
+    // par ZXing, entièrement local (aucun service Google, aucune télémétrie).
+    implementation "androidx.biometric:biometric:1.1.0"
+    implementation "com.journeyapps:zxing-android-embedded:4.3.0"
+    implementation "com.google.zxing:core:3.5.3"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

@@ -153,6 +153,13 @@
   const isWrapped = (w) => isObj(w) && typeof w.salt === "string" && typeof w.iv === "string"
     && typeof w.ct === "string" && Number.isInteger(w.iter) && w.iter > 0;
 
+  // Erreurs du Keystore (Error.code du natif) : seules une clé absente ou effacée (KEY_MISSING) et un blob
+  // illisible (BAD_BLOB) sont définitives ; le reste (FAILED : erreur passagère d'Android…) se réessaie.
+  const KEY_GONE = ["KEY_MISSING", "BAD_BLOB"];
+  const BIO_GONE = ["KEY_INVALIDATED", ...KEY_GONE];
+  // Erreur passagère du Keystore : le code n'a pas été essayé (pas compté dans le délai anti-essais).
+  const NATIVE_ERROR = { ok: false, wait_seconds: 0, error: "native" };
+
   class LocalApi {
     // `iterations` : réservé aux tests (PBKDF2 réduit) ; en production, la valeur du module crypto.
     constructor({ native, clock = Date.now, iterations = C.PBKDF2_ITERATIONS } = {}) {
@@ -268,6 +275,27 @@
       } catch (e) { /* préférence non écrite : le délai reste appliqué en mémoire */ }
     }
 
+    // Enveloppe du code (keys.code) sortie du Keystore : l'objet, ou « corrupt » (définitif, coffre marqué
+    // corrompu) ou « native » (erreur passagère, rien n'est modifié).
+    async _codeEnvelope() {
+      let raw;
+      try {
+        raw = await this._native.unwrap(ALIAS_CODE, this._keys.code);
+      } catch (e) {
+        if (!(e && KEY_GONE.includes(e.code))) return "native";
+        raw = null;
+      }
+      let wrapped = null;
+      try {
+        if (raw) wrapped = parseJson(dec.decode(raw));
+      } catch (e) { /* octets illisibles */ }
+      if (!isWrapped(wrapped)) {
+        await this._markCorrupt();
+        return "corrupt";
+      }
+      return wrapped;
+    }
+
     async _wrapCode(dataKey, code) {
       const wrapped = await C.wrapWithCode(dataKey, String(code), this._iterations);
       return this._native.wrap(ALIAS_CODE, enc.encode(JSON.stringify(wrapped)));
@@ -335,15 +363,10 @@
         const corrupt = { ok: false, wait_seconds: 0, error: "corrupt" };
         if (!this._hasData) return corrupt;
         code = String(code ?? "");
-        // couche Keystore et format des fichiers : indépendants du code saisi → « corrupt »
-        let wrapped = null;
-        try {
-          wrapped = parseJson(dec.decode(await this._native.unwrap(ALIAS_CODE, this._keys.code)));
-        } catch (e) { /* clé du Keystore perdue ou blob abîmé */ }
-        if (!isWrapped(wrapped)) {
-          await this._markCorrupt();
-          return corrupt;
-        }
+        // couche Keystore et format des fichiers : indépendants du code saisi → « corrupt » ou « native »
+        const wrapped = await this._codeEnvelope();
+        if (wrapped === "corrupt") return corrupt;
+        if (wrapped === "native") return { ...NATIVE_ERROR };
         // seule l'épreuve du code peut donner « bad_code » : un mauvais PIN n'efface jamais rien
         let dataKey;
         try {
@@ -376,14 +399,9 @@
         if (wait > 0) return { ok: false, wait_seconds: wait, error: "wait" };
         if (!this._hasData) return { ok: false, wait_seconds: 0, error: "corrupt" };
         code = String(code ?? "");
-        let wrapped = null;
-        try {
-          wrapped = parseJson(dec.decode(await this._native.unwrap(ALIAS_CODE, this._keys.code)));
-        } catch (e) { /* clé du Keystore perdue ou blob abîmé */ }
-        if (!isWrapped(wrapped)) {
-          await this._markCorrupt();
-          return { ok: false, wait_seconds: 0, error: "corrupt" };
-        }
+        const wrapped = await this._codeEnvelope();
+        if (wrapped === "corrupt") return { ok: false, wait_seconds: 0, error: "corrupt" };
+        if (wrapped === "native") return { ...NATIVE_ERROR };
         try {
           await C.unwrapWithCode(wrapped, code);
         } catch (e) {
@@ -405,7 +423,9 @@
           dataKey = await this._native.unwrap(ALIAS_BIO, this._keys.bio, { title: "Déverrouiller Passe-Partout" });
         } catch (e) {
           if (e && e.code === "CANCELED") return { ok: false, error: "canceled" };
-          // empreinte ajoutée ou retirée dans Android (KEY_INVALIDATED) ou clé inutilisable : on désactive
+          // erreur passagère (trop d'essais, Keystore occupé…) : l'empreinte reste activée
+          if (!(e && BIO_GONE.includes(e.code))) return { ok: false, error: "native" };
+          // empreinte ajoutée ou retirée dans Android (KEY_INVALIDATED), clé effacée ou blob illisible : on désactive
           await this._dropBio();
           return { ok: false, error: "bio_invalidated" };
         }
@@ -449,7 +469,7 @@
           }
           let blob;
           try {
-            blob = await this._native.wrap(ALIAS_BIO, this._dataKey, { biometric: true });
+            blob = await this._native.wrap(ALIAS_BIO, this._dataKey, { biometric: true, title: "Activer l'empreinte" });
           } catch (e) {
             if (e && e.code === "CANCELED") throw new Error("Activation de l'empreinte annulée");
             throw new Error("Impossible d'activer l'empreinte digitale");

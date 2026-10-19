@@ -96,7 +96,8 @@
     try {
       text = await native.scanQr();
     } catch (e) {
-      if (token === seq) startScreen("Impossible d'ouvrir l'appareil photo.");
+      // appareil photo refusé : le natif explique où l'autoriser
+      if (token === seq) startScreen(e && e.code === "CAMERA_DENIED" && e.message ? e.message : "Impossible d'ouvrir l'appareil photo.");
       return;
     }
     if (token !== seq) return;

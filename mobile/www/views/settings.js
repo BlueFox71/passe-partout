@@ -183,6 +183,7 @@
           return saveBio(true);
         }
         if (r.error === "corrupt") return PP.route();
+        if (r.error === "native") { err.textContent = "Erreur de sécurité Android, réessaie."; return; }
         startWait(r.wait_seconds, r.error !== "wait");
       };
       const input = PP.pinPad.bind(codeBox, { pinLength, onSubmit: submit, blocked: () => busy || waiting });

@@ -295,9 +295,12 @@ test("nativeFake : wrap réversible mais pas identité ; deleteKey rend l'ancien
   assert.equal(typeof blob, "string");
   assert.ok(nativeFake.isFakeBlob(blob, "pp-device"));
   assert.deepEqual(await n.unwrap("pp-device", blob), bytes);
-  await assert.rejects(n.unwrap("pp-autre", blob), { code: "FAILED" });
+  await assert.rejects(n.unwrap("pp-autre", blob), { code: "BAD_BLOB" });
+  await assert.rejects(n.unwrap("pp-device", "pas un blob"), { code: "BAD_BLOB" });
   await n.deleteKey("pp-device");
-  await assert.rejects(n.unwrap("pp-device", blob), { code: "FAILED" });
+  await assert.rejects(n.unwrap("pp-device", blob), { code: "KEY_MISSING" });
+  await n.wrap("pp-device", bytes); // nouvelle clé : l'ancien blob reste illisible
+  await assert.rejects(n.unwrap("pp-device", blob), { code: "BAD_BLOB" });
   assert.equal(await n.readFile("absent"), null);
   assert.equal(await n.getPref("absent"), null);
   assert.equal(await n.scanQr(), null);
@@ -427,4 +430,69 @@ test("verify_code : mêmes règles que unlock, sans verrouiller ; sync_info donn
   assert.deepEqual(await api.verify_code("1234"), { ok: true, wait_seconds: 0 });
   assert.equal((await api.get_state()).locked, false);
   assert.equal((await api.sync_info()).pc_name, "PC-Salon");
+});
+
+// ---------------------------------------------------------------- erreurs du Keystore distinguées
+test("clé du code : erreur passagère du Keystore → « native », réessayable, rien de marqué ni compté", async () => {
+  for (const code of ["FAILED", "KEY_INVALIDATED", "CANCELED", undefined]) {
+    const { api, native } = await synced();
+    await api.lock();
+    native.setUnwrapError(code || "SANS_CODE");
+    for (let i = 0; i < 4; i++) {
+      assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 0, error: "native" }, String(code));
+    }
+    assert.deepEqual(await api.verify_code("1234"), { ok: false, wait_seconds: 0, error: "native" });
+    const s = await api.get_state();
+    assert.deepEqual([s.corrupt, s.locked, s.has_data], [false, true, true]);
+    native.setUnwrapError(null);
+    // aucun délai anti-essais : le bon code passe tout de suite
+    assert.deepEqual(await api.unlock("1234"), { ok: true, wait_seconds: 0 });
+  }
+});
+
+test("clé du code : KEY_MISSING ou blob illisible → corrompu", async () => {
+  {
+    const { api, native } = await synced();
+    await api.lock();
+    native.setUnwrapError("KEY_MISSING");
+    assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 0, error: "corrupt" });
+    assert.equal((await api.get_state()).corrupt, true);
+  }
+  {
+    const { api, native } = await synced();
+    await api.lock();
+    const keys = JSON.parse(await native.readFile("keys.json"));
+    keys.code = "abîmé";
+    await native.writeFileAtomic("keys.json", JSON.stringify(keys));
+    const api2 = new LocalApi({ native, clock: () => 0, iterations: ITER });
+    assert.deepEqual(await api2.verify_code("1234"), { ok: false, wait_seconds: 0, error: "corrupt" });
+    assert.equal((await api2.get_state()).corrupt, true);
+  }
+});
+
+test("empreinte : erreur passagère → « native », empreinte gardée ; clé effacée → désactivée", async () => {
+  const { api, native } = await synced();
+  await api.save_settings({ biometric: true });
+  await api.lock();
+  native.setBiometricError("FAILED");
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "native" });
+  assert.equal((await api.get_state()).biometric, true);
+  native.setBiometricError(null);
+  assert.deepEqual(await api.unlock_biometric(), { ok: true });
+  await api.lock();
+  await native.deleteKey("pp-bio");
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "bio_invalidated" });
+  const s = await api.get_state();
+  assert.deepEqual([s.biometric, s.corrupt, s.locked], [false, false, true]);
+  assert.equal((await api.unlock("1234")).ok, true);
+});
+
+test("nativeFake : bouton retour essayé du dernier rappel au premier", async () => {
+  const n = nativeFake.create();
+  assert.equal(await n.fireBack(), false);
+  const seen = [];
+  n.onBack(() => { seen.push("a"); return true; });
+  n.onBack(() => { seen.push("b"); return false; });
+  assert.equal(await n.fireBack(), true);
+  assert.deepEqual(seen, ["b", "a"]);
 });
