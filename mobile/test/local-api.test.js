@@ -618,3 +618,30 @@ test("nativeFake : écran natif (empreinte, scanner) signalé pendant l'appel (R
   assert.equal(await q, "qr");
   assert.equal(native.inNativeScreen(), false);
 });
+
+test("sync_info envoie la version de l'appli (PPM.VERSION)", async () => {
+  require("../www/js/version.js");
+  const { api } = setup();
+  const info = await api.sync_info();
+  assert.equal(typeof globalThis.PPM.VERSION, "string");
+  assert.strictEqual(info.app_version, globalThis.PPM.VERSION);
+});
+
+test("nativeFake : installApk enregistre les octets, écran natif pendant l'appel, refus simulable", async () => {
+  const native = nativeFake.create({ store: nativeFake.memoryStore() });
+  assert.deepEqual(native.installed, []);
+  const bytes = new Uint8Array([80, 75, 3, 4, 9]);
+  const p = native.installApk(bytes);
+  assert.equal(native.inNativeScreen(), true);
+  await p;
+  assert.equal(native.inNativeScreen(), false);
+  assert.deepEqual(Array.from(native.installed[0]), [80, 75, 3, 4, 9]);
+  bytes[0] = 0; // copie gardée, pas une référence
+  assert.equal(native.installed[0][0], 80);
+  native.setInstallError("INSTALL_PERMISSION");
+  await assert.rejects(native.installApk(bytes), { code: "INSTALL_PERMISSION" });
+  assert.equal(native.installed.length, 1);
+  native.setInstallError(null);
+  await native.installApk(bytes);
+  assert.equal(native.installed.length, 2);
+});

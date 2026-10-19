@@ -33,6 +33,7 @@
             android:windowSoftInputMode="stateAlwaysHidden"
             android:exported="false" />
 
+        <!-- Mise à jour reçue du PC : l'APK de cache/apk/ est montré à l'installateur (res/xml/file_paths.xml) -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -49,4 +50,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Déverrouillage par empreinte -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Installation de la mise à jour de l'appli reçue du PC pendant la synchro -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

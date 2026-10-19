@@ -6,10 +6,12 @@ import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PersistableBundle;
+import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyPermanentlyInvalidatedException;
 import android.security.keystore.KeyProperties;
@@ -19,6 +21,7 @@ import androidx.activity.result.ActivityResult;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.fragment.app.FragmentActivity;
 import androidx.lifecycle.Lifecycle;
 
@@ -34,6 +37,9 @@ import com.getcapacitor.annotation.PermissionCallback;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.security.KeyStore;
 import java.util.Arrays;
 import java.util.Collections;
@@ -61,7 +67,9 @@ import javax.crypto.spec.GCMParameterSpec;
  *   CANCELED        : fenêtre d'empreinte annulée (bouton « Utiliser le code », retour, appli en arrière-plan) ;
  *   LOCKOUT         : trop d'essais d'empreinte (capteur bloqué par Android, temporairement ou non) ;
  *   FAILED          : tout le reste (erreur passagère du Keystore…) ;
- *   CAMERA_DENIED   : appareil photo refusé (scanQr).
+ *   CAMERA_DENIED   : appareil photo refusé (scanQr) ;
+ *   INSTALL_PERMISSION : installation d'applis non autorisée pour Passe-Partout (installApk ; l'écran
+ *                     d'autorisation d'Android a été ouvert, l'utilisateur doit réessayer).
  * Rien n'est journalisé : ni données, ni clés, ni exceptions.
  */
 @CapacitorPlugin(
@@ -426,5 +434,72 @@ public class PassePartoutPlugin extends Plugin {
             out.put("text", text);
         }
         call.resolve(out);
+    }
+
+    // ------------------------------------------------------------ mise à jour de l'appli (APK reçu du PC)
+    // L'APK (base64, champ « data ») est écrit dans cache/apk/ (seul dossier exposé par le FileProvider,
+    // res/xml/file_paths.xml), puis remis à l'installateur d'Android. Lancés « pour résultat » : l'appel ne
+    // se termine qu'au retour dans l'appli, pour que le JS compte ces écrans comme natifs (Ruling 23).
+    private static final String APK_DIR = "apk";
+    private static final String APK_FILE = "passe-partout-update.apk";
+    private static final String APK_MIME = "application/vnd.android.package-archive";
+
+    @PluginMethod
+    public void installApk(PluginCall call) {
+        try {
+            byte[] apk = decodeB64(call.getString("data"), "FAILED", "Mise à jour illisible.");
+            if (apk.length == 0) throw new NativeError("FAILED", "Mise à jour illisible.");
+            Context ctx = getContext();
+            if (!ctx.getPackageManager().canRequestPackageInstalls()) {
+                Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + ctx.getPackageName()));
+                launchForResult(call, settings, "installPermissionResult");
+                return;
+            }
+            File dir = new File(ctx.getCacheDir(), APK_DIR);
+            File[] old = dir.listFiles();
+            if (old != null) {
+                for (File f : old) f.delete(); // anciennes mises à jour
+            }
+            if (!dir.isDirectory() && !dir.mkdirs()) throw new NativeError("FAILED", "Espace de stockage indisponible.");
+            File file = new File(dir, APK_FILE);
+            try (OutputStream out = new FileOutputStream(file)) {
+                out.write(apk);
+            }
+            Uri uri = FileProvider.getUriForFile(ctx, ctx.getPackageName() + ".fileprovider", file);
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, APK_MIME);
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            launchForResult(call, install, "installResult");
+        } catch (Exception e) {
+            if (e instanceof NativeError) {
+                call.reject(e.getMessage(), ((NativeError) e).code);
+            } else {
+                call.reject("Installation de la mise à jour impossible.", "FAILED");
+            }
+        }
+    }
+
+    // Lancement sur le thread principal ; écran introuvable → FAILED.
+    private void launchForResult(PluginCall call, Intent intent, String callback) {
+        mainHandler.post(() -> {
+            try {
+                startActivityForResult(call, intent, callback);
+            } catch (Exception e) {
+                call.reject("Installation de la mise à jour impossible.", "FAILED");
+            }
+        });
+    }
+
+    @ActivityCallback
+    private void installPermissionResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        call.reject("Autorise Passe-Partout à installer des applis, puis réessaie.", "INSTALL_PERMISSION");
+    }
+
+    @ActivityCallback
+    private void installResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        call.resolve(); // installateur refermé (mise à jour annulée ou échouée ; installée : l'appli redémarre)
     }
 }

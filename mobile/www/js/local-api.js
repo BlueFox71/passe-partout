@@ -14,6 +14,7 @@
     if (!PPM.crypto) require("./crypto.js");
     if (!PPM.Lockout) require("./lockout.js");
     if (!PPM.vault) require("./vaultlogic.js");
+    if (!PPM.VERSION) require("./version.js");
   }
   const C = PPM.crypto;
   const V = PPM.vault;
@@ -582,6 +583,7 @@
         code_version: this._hasData ? strOrNull(this._meta.code_version) : null,
         has_data: this._hasData,
         now: V.nowIso(this._date()),
+        app_version: PPM.VERSION, // le PC refuse un téléphone d'une autre version (mise à jour proposée)
       }));
     }
 

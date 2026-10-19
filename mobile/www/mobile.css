@@ -99,6 +99,10 @@ body.m-preview .m-body { padding-top: calc(30px + var(--safe-top)); }
 @keyframes m-spin { to { transform: rotate(360deg); } }
 .m-sync-ok { color: var(--ok); font-weight: 800; font-size: 18px; text-shadow: 0 0 10px rgba(61, 255, 176, .45); }
 .m-sync-sum { color: var(--muted); }
+/* mise à jour de l'appli reçue du PC */
+.m-sync-card .m-update-busy { min-height: 40px; }
+.m-sync-card .m-update-busy[hidden] { display: none; }
+.m-sync-card .m-update-note { font-size: 14px; line-height: 1.45; color: var(--muted); text-align: center; }
 
 /* écran de départ : illustration néon téléphone ⇄ PC */
 .m-sync-hero { display: block; width: 100%; max-width: 360px; height: 164px; margin: 0 auto 6px; overflow: visible; }
