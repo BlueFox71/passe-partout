@@ -140,6 +140,13 @@
     await PP.route();
   }
 
+  // Téléphone : le presse-papiers n'est pas effacé automatiquement (choix de Jules) ; ui/app.js (partagé avec
+  // le PC, qui efface après 30 s) est donc remplacé ici par une version sans compte à rebours.
+  PP.copySecret = async (text, what = "Mot de passe") => {
+    await PP.call("copy_secret", text);
+    PP.toast(`${what} copié`);
+  };
+
   PP.mobile = { native, preview: !isNative, loadDemo };
 
   // ---------------------------------------------------------------- navigation

@@ -283,9 +283,24 @@ test("erreurs de validation en français", async () => {
 test("copy_secret / copy_plain passent par le natif", async () => {
   const { api, native } = await synced();
   assert.deepEqual(await api.copy_secret("pw"), {});
-  assert.deepEqual(native.clipboard, { text: "pw", sensitive: true, seconds: 30 });
+  assert.deepEqual(native.clipboard, { text: "pw", sensitive: true });
   await api.copy_plain("login");
-  assert.deepEqual(native.clipboard, { text: "login", sensitive: false, seconds: null });
+  assert.deepEqual(native.clipboard, { text: "login", sensitive: false });
+});
+
+test("copy_secret laisse le texte dans le presse-papiers (aucun effacement programmé)", async () => {
+  const { api, native } = await synced();
+  const realSetTimeout = global.setTimeout;
+  let timers = 0;
+  global.setTimeout = (...a) => { timers++; return realSetTimeout(...a); };
+  try {
+    await api.copy_secret("pw");
+  } finally {
+    global.setTimeout = realSetTimeout;
+  }
+  assert.equal(timers, 0);
+  assert.equal(native.clipboard.text, "pw");
+  assert.equal(native.clipboard.sensitive, true);
 });
 
 test("nativeFake : wrap réversible mais pas identité ; deleteKey rend l'ancien blob illisible", async () => {

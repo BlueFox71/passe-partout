@@ -78,8 +78,6 @@ public class PassePartoutPlugin extends Plugin {
     private static final String IS_SENSITIVE_LEGACY = "android.content.extra.IS_SENSITIVE";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    // Numéro de la dernière copie faite par l'appli : l'effacement programmé n'efface que sa propre copie.
-    private int clipSeq = 0;
 
     /** Erreur portant un code transmis au JS. */
     private static final class NativeError extends Exception {
@@ -346,7 +344,6 @@ public class PassePartoutPlugin extends Plugin {
     @PluginMethod
     public void copySensitive(PluginCall call) {
         String text = call.getString("text", "");
-        int seconds = Math.max(1, call.getInt("seconds", 30));
         mainHandler.post(() -> {
             try {
                 ClipboardManager cm = clipboard();
@@ -360,15 +357,6 @@ public class PassePartoutPlugin extends Plugin {
                 }
                 clip.getDescription().setExtras(extras);
                 cm.setPrimaryClip(clip);
-                final int mine = ++clipSeq;
-                // effacé après `seconds` s, même appli en arrière-plan (tant que le processus vit),
-                // sauf si l'appli a copié autre chose entre-temps
-                mainHandler.postDelayed(() -> {
-                    if (mine != clipSeq) return;
-                    try {
-                        clipboard().clearPrimaryClip();
-                    } catch (Exception e) { /* presse-papiers indisponible : rien à faire */ }
-                }, seconds * 1000L);
                 call.resolve();
             } catch (Exception e) {
                 call.reject("Copie impossible.", "FAILED");
@@ -382,7 +370,6 @@ public class PassePartoutPlugin extends Plugin {
         mainHandler.post(() -> {
             try {
                 clipboard().setPrimaryClip(ClipData.newPlainText("Passe-Partout", text));
-                clipSeq++; // une copie sensible plus ancienne ne doit plus effacer celle-ci
                 call.resolve();
             } catch (Exception e) {
                 call.reject("Copie impossible.", "FAILED");

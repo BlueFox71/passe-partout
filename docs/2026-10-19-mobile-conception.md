@@ -142,7 +142,7 @@ par le PC à l'étape 5 ; un code faux est refusé (avec le délai anti-essais d
 - Délai croissant après codes faux (comme le PC), conservé après redémarrage de l'appli.
 - Verrouillage automatique : passage en arrière-plan (> 30 s) et inactivité (5 min, réglable).
 - Captures d'écran et aperçu dans les apps récentes bloqués (`FLAG_SECURE`).
-- Presse-papiers vidé 30 s après copie d'un mot de passe / code / PIN.
+- Presse-papiers : sur le téléphone, ce qui est copié n'est pas effacé automatiquement (choix de Jules, 19/10/2026) ; il est marqué « sensible » pour ne pas apparaître dans l'aperçu d'Android. Le PC efface toujours après 30 s.
 - Aucune permission réseau Internet n'est nécessaire au-delà du réseau local ; aucune télémétrie.
 
 ## 8. Côté PC : changements d'interface

@@ -19,7 +19,7 @@
 - Synchro : AES-256-GCM, clé de 32 octets aléatoires du QR, nonce de 12 octets aléatoire par message, serveur ouvert **120 s**, une seule synchro réussie par QR.
 - QR : `{"v":1,"hosts":[IP…],"port":N,"key":<base64url>,"pc":"<nom du PC>"}`.
 - Pierres tombales `{"kind":"account"|"giftcard"|"profile","id","at"}` gardées **180 jours** ; téléphone non synchronisé depuis plus de 180 jours → remplacement avec avertissement.
-- Téléphone : PBKDF2-SHA256 **≥ 600 000** itérations ; verrouillage après **30 s** en arrière-plan et **5 min** d'inactivité par défaut ; presse-papiers vidé **30 s** après copie d'un secret ; délai croissant après codes faux `min(2^(n-1), 300)` s conservé au redémarrage.
+- Téléphone : PBKDF2-SHA256 **≥ 600 000** itérations ; verrouillage après **30 s** en arrière-plan et **5 min** d'inactivité par défaut ; presse-papiers vidé **30 s** après copie d'un secret (PC seulement : sur le téléphone, plus d'effacement automatique, choix de Jules du 19/10/2026) ; délai croissant après codes faux `min(2^(n-1), 300)` s conservé au redémarrage.
 - Paquet Android `fr.passepartout.app`, minSdk **28** (Android 9), APK `mobile/dist/passe-partout.apk`, clé de signature dans `%APPDATA%\GestionnaireMdp\android-signing\` (jamais dans le dépôt).
 - Les réglages (`settings`) et le registre `sync` ne sont jamais envoyés au téléphone.
 

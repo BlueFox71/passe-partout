@@ -140,8 +140,8 @@
     },
 
     // ------------------------------------------------------------ presse-papiers
-    async copySensitive(text, seconds = 30) {
-      await PassePartout.copySensitive({ text: String(text), seconds: Math.max(1, Math.trunc(Number(seconds) || 30)) });
+    async copySensitive(text) {
+      await PassePartout.copySensitive({ text: String(text) });
     },
 
     async copyPlain(text) {

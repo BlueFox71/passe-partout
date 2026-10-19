@@ -145,13 +145,13 @@
 
       async biometricAvailable() { return bioAvailable; },
 
-      async copySensitive(text, seconds = 30) {
-        fake.clipboard = { text: String(text), sensitive: true, seconds };
+      async copySensitive(text) {
+        fake.clipboard = { text: String(text), sensitive: true };
         await browserCopy(text);
       },
 
       async copyPlain(text) {
-        fake.clipboard = { text: String(text), sensitive: false, seconds: null };
+        fake.clipboard = { text: String(text), sensitive: false };
         await browserCopy(text);
       },
 

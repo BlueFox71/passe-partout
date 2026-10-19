@@ -24,7 +24,6 @@
   const KEYS_FILE = "keys.json";
   const ALIAS_CODE = "pp-device";
   const ALIAS_BIO = "pp-bio";
-  const CLIPBOARD_SECONDS = 30;
   const IMAGE_MAX = 256;
   const LOCKED = "Coffre verrouillé";
   const DEFAULT_SETTINGS = { autolock_minutes: 5, biometric: false };
@@ -537,7 +536,7 @@
     // ------------------------------------------------------------ presse-papiers, images
     copy_secret(text) {
       return this._run(async () => {
-        await this._native.copySensitive(String(text), CLIPBOARD_SECONDS);
+        await this._native.copySensitive(String(text));
         return {};
       });
     }
