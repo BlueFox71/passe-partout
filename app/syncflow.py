@@ -11,13 +11,16 @@ import hmac
 import math
 import os
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Callable
 
+from app.apk import apk_info, find_apk
 from app.lockout import Lockout
 from app.merge import TOMBSTONE_DAYS, merge
 from app.model import Vault
 from app.store import VaultStore
 from app.sync import b64u, unb64u
+from app.version import VERSION, compare_versions, parse_version
 
 MAX_SKEW_SECONDS = 300
 DEVICE_NAME_MAX = 60
@@ -34,7 +37,10 @@ _MESSAGES = {
     "bad_code": "Code incorrect.",
     "invalid": "Message de synchronisation invalide.",
     "save_failed": "Impossible d'enregistrer les données reçues sur le PC.",
+    "pc_outdated": "Mets à jour Passe-Partout sur le PC (Le Grenier).",
 }
+_UPDATE_NO_VERSION = "Mets à jour l'appli : sur le PC, Réglages → Installer l'appli sur le téléphone."
+
 _KINDS = ("account", "giftcard", "profile")
 _TOMBSTONE_KEYS = frozenset({"kind", "id", "at"})
 _HISTORY_KEYS = frozenset({"id", "date", "amount"})
@@ -215,7 +221,7 @@ def pair_proof(pair: str, qr_key: bytes, label: bytes) -> str | None:
 class SyncFlow:
     def __init__(self, store: VaultStore, lockout: Lockout, persist_lockout: Callable[[], None],
                  config: Callable[[], dict], pc_name: str, now: Callable[[], datetime] = datetime.now, *,
-                 qr_key: bytes):
+                 qr_key: bytes, apk_provider: Callable[[], Path | None] = find_apk):
         self._store = store
         self._lockout = lockout
         self._persist_lockout = persist_lockout
@@ -223,9 +229,19 @@ class SyncFlow:
         self._pc_name = pc_name
         self._now = now
         self._qr_key = bytes(qr_key or b"")  # clé du QR de cette session : les preuves d'appairage y sont liées
+        self._apk_provider = apk_provider  # APK embarqué (injecté : les tests fournissent un petit fichier)
         self._hello: dict | None = None  # résultat du hello : device_id, need_code, mode
+        # hello consommé sans synchro possible : "update_required" (seul « apk » est ensuite accepté) ou
+        # "pc_outdated" (plus rien)
+        self._blocked: str | None = None
         self.device_name: str | None = None
         self.summary: dict | None = None
+        self.notice: str | None = None  # information pour l'écran du PC (mise à jour du téléphone)
+
+    @property
+    def update_required(self) -> bool:
+        """Vrai si le téléphone a été refusé parce que son appli est trop ancienne (« update_required »)."""
+        return self._blocked == "update_required"
 
     def handle(self, msg: dict) -> dict:
         """Aiguille un message déchiffré du téléphone sur « hello », « sync » ou « cancel »."""
@@ -237,6 +253,8 @@ class SyncFlow:
                 return self._on_hello(msg)
             if kind == "sync":
                 return self._on_sync(msg)
+            if kind == "apk":
+                return self._on_apk()
             raise _Refused("invalid")
         except _Refused as r:
             return r.reply
@@ -283,8 +301,11 @@ class SyncFlow:
 
     # ------------------------------------------------------------ hello
     def _on_hello(self, msg: dict) -> dict:
-        if self._hello is not None:
+        if self._hello is not None or self._blocked is not None:
             raise _Refused("invalid")  # un seul hello par session : sinon on pourrait sonder la version du code
+        app_version = msg.get("app_version")  # absent (ou null) : appli 0.1.0, d'avant ce champ
+        if app_version is not None and parse_version(app_version) is None:
+            _invalid("app_version")
         device_id = _str(msg, "device_id", required=True, nonempty=True)
         device_name = _device_name(msg)
         generation = _str(msg, "generation", optional=True)
@@ -296,6 +317,8 @@ class SyncFlow:
         phone_proof = _str(msg, "proof", optional=True)
         now = self._check_clock(msg)
         self._check_store()
+        # avant le code et l'appairage : un téléphone à mettre à jour ne reçoit ni preuve ni version du code
+        self._check_app_version(app_version, device_name)
 
         # appareil inconnu (jamais vu ou « oublié »), sans preuve d'appairage valide (le device_id seul n'est
         # pas un secret : il est envoyé à quiconque montre un QR), code changé sur le PC ou coffre PC remplacé
@@ -330,6 +353,44 @@ class SyncFlow:
             # sinon la version du code n'est donnée qu'après vérification du code (réponse de sync)
             reply["code_version"] = self._store.code_version()
         return reply
+
+    # ------------------------------------------------------------ version de l'appli
+    def _check_app_version(self, app_version: str | None, device_name: str) -> None:
+        cmp = -1 if app_version is None else compare_versions(app_version, VERSION)
+        if cmp == 0:
+            return
+        if cmp > 0:
+            self._blocked = "pc_outdated"
+            self.device_name = device_name
+            raise _Refused("pc_outdated")
+        self._blocked = "update_required"
+        self.device_name = device_name
+        info = apk_info(self._apk_provider())
+        if app_version is None:
+            message = _UPDATE_NO_VERSION
+        else:
+            message = (f"Une nouvelle version de l'appli est disponible ({app_version} → {VERSION}) : "
+                       "mets-la à jour pour synchroniser.")
+        self.notice = f"{device_name} doit être mis à jour ({app_version or 'ancienne version'} → {VERSION})"
+        raise _Refused("update_required", message, current=app_version, available=VERSION,
+                       size=info["size"] if info else None, sha256=info["sha256"] if info else None)
+
+    def _on_apk(self) -> dict:
+        """APK embarqué, dans la session chiffrée, après un « update_required » ; ne ferme pas la session."""
+        if self._blocked != "update_required":
+            raise _Refused("invalid")
+        path = self._apk_provider()
+        if path is None:
+            raise _Refused("invalid")
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            raise _Refused("invalid") from None
+        sha256 = hashlib.sha256(data).hexdigest()  # empreinte des octets réellement envoyés
+        encoded = b64u(data)
+        del data  # ~11 Mo : seule la version encodée reste en mémoire jusqu'au chiffrement
+        self.notice = f"✓ Appli envoyée à {self.device_name}"
+        return {"ok": True, "apk": encoded, "sha256": sha256, "version": VERSION}
 
     # ------------------------------------------------------------ sync
     def _check_code(self, code) -> None:

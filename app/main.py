@@ -6,12 +6,15 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import webview
 
 from app.api import Api
+from app.instance import acquire_instance_lock
 from app.store import VaultStore
+from app.version import VERSION  # lu dès le lancement : un exe sans fichier VERSION échoue tout de suite
 from app.winclip import WinClipboard
 
 APP_NAME = "Passe-Partout"
@@ -118,9 +121,82 @@ def window_geometry(saved: dict) -> dict:
     return {"width": w, "height": h, "x": x, "y": y, "maximized": maximized}
 
 
-def run(data_dir: Path | None = None) -> None:
-    configure_webview_env()
+def show_message(text: str, title: str) -> None:
+    """Boîte de message Windows (information), affichée sans fenêtre principale."""
+    MB_ICONINFORMATION = 0x40
+    ctypes.windll.user32.MessageBoxW(None, text, title, MB_ICONINFORMATION)
+
+
+OLD_EXE_NAME = "Passe-Partout.exe"  # ancienne copie (dossier dist\Passe-Partout\), sans verrou d'instance
+OLD_COPY_MESSAGE = f"Ferme l'ancienne copie de {APP_NAME}, puis relance."
+
+
+class _ProcessEntry32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+def running_process_names() -> list[str]:
+    """Noms des exécutables en cours (Win32 : CreateToolhelp32Snapshot) ; liste vide en cas d'échec."""
+    TH32CS_SNAPPROCESS = 0x2
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ProcessEntry32W)]
+    kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ProcessEntry32W)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return []
+    names = []
+    try:
+        entry = _ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            names.append(entry.szExeFile)
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return names
+
+
+def old_copy_running(names: Iterable[str]) -> bool:
+    """Vrai si l'ancienne copie (« Passe-Partout.exe », nom exact, sans numéro de version) tourne (Ruling 6)."""
+    return any(n.lower() == OLD_EXE_NAME.lower() for n in names)
+
+
+_instance_lock = None  # gardé ouvert toute la vie du processus
+
+
+def run(data_dir: Path | None = None,
+        process_names: Callable[[], Iterable[str]] = running_process_names) -> None:
+    global _instance_lock
+    # avant le verrou et tout accès au coffre : l'ancienne copie n'a pas de verrou et écrirait en même temps
+    try:
+        old = old_copy_running(process_names())
+    except Exception:
+        old = False
+    if old:
+        show_message(OLD_COPY_MESSAGE, APP_NAME)
+        return
     data_dir = Path(data_dir) if data_dir else default_data_dir()
+    lock = acquire_instance_lock(data_dir)
+    if lock is None:
+        show_message(f"{APP_NAME} est déjà ouvert.", APP_NAME)
+        return
+    _instance_lock = lock
+    configure_webview_env()
     dialogs = Dialogs()
     clip = WinClipboard()
     api = Api(VaultStore(data_dir / "vault.json"), clip, dialogs=dialogs)

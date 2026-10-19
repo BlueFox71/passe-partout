@@ -22,6 +22,7 @@ const PYTHON = [
 const ITER = 1000; // PBKDF2 réduit pour le test
 const CODE = "123456";
 const NEW_CODE = "654321";
+const TIMEOUT = 10000; // machine de test chargée (après une construction Gradle) : 3 s ne suffisent pas toujours
 
 function startPc() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pp-e2e-"));
@@ -42,7 +43,8 @@ function startPc() {
     py.kill();
     fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
   };
-  return { main: pc("main"), forger: pc("forger"), stop };
+  const setApk = (size) => send({ op: "set_apk", size });
+  return { main: pc("main"), forger: pc("forger"), setApk, stop };
 }
 
 test("vrai PC ↔ téléphone : appairage, fusion, faux PC, code changé, restauration", {
@@ -58,7 +60,7 @@ test("vrai PC ↔ téléphone : appairage, fusion, faux PC, code changé, restau
     // Une synchro complète comme views/sync.js : QR, hello (avec preuve), sync, apply_sync.
     async function sync(pc, codes = []) {
       const qr = parseQr(await pc.qr());
-      const client = new SyncClient({ qr, post: (u, b, t) => native.post(u, b, t), crypto });
+      const client = new SyncClient({ qr, post: (u, b, t) => native.post(u, b, t), crypto, timeoutMs: TIMEOUT });
       try {
         const info = await phone.sync_info();
         const hello = await client.hello(info, { pair: await phone.sync_pair() });
@@ -120,7 +122,7 @@ test("vrai PC ↔ téléphone : appairage, fusion, faux PC, code changé, restau
     await forger.call("start_empty", "Pirate");
     await forger.call("set_lock", "pin", "000000");
     const fq = parseQr(await forger.qr());
-    const fc = new SyncClient({ qr: fq, post: (u, b, t) => native.post(u, b, t), crypto });
+    const fc = new SyncClient({ qr: fq, post: (u, b, t) => native.post(u, b, t), crypto, timeoutMs: TIMEOUT });
     await assert.rejects(fc.hello(await phone.sync_info(), { pair: await phone.sync_pair() }), { code: "unpaired" });
     await assert.rejects(fc.sync(syncMessage(await phone.sync_info(), { mode: "replace" }, { code: CODE })), /hello d'abord/);
     await forger.call("sync_stop");
@@ -148,7 +150,7 @@ test("vrai PC ↔ téléphone : appairage, fusion, faux PC, code changé, restau
       assert.equal((await main.call("unlock", CODE)).ok, true);
     }
     const rq = parseQr(await main.qr());
-    const rc = new SyncClient({ qr: rq, post: (u, b, t) => native.post(u, b, t), crypto });
+    const rc = new SyncClient({ qr: rq, post: (u, b, t) => native.post(u, b, t), crypto, timeoutMs: TIMEOUT });
     await assert.rejects(rc.hello(await phone.sync_info(), { pair: await phone.sync_pair() }), { code: "unpaired" });
     await rc.cancel();
     await main.call("sync_stop");
@@ -162,6 +164,42 @@ test("vrai PC ↔ téléphone : appairage, fusion, faux PC, code changé, restau
     assert.equal(hello.need_code, false);
     assert.equal(hello.mode, "merge");
   } finally {
+    stop();
+  }
+});
+
+test("vrai PC : téléphone 0.9.0 → mise à jour exigée, APK reçu dans la session, empreinte conforme", {
+  skip: PYTHON ? false : "environnement Python du dépôt absent (.venv) : crée-le pour lancer ce test",
+  timeout: 60000,
+}, async () => {
+  const { main, setApk, stop } = startPc();
+  try {
+    const native = nativeFake.create({ store: nativeFake.memoryStore() });
+    const phone = new LocalApi({ native, iterations: ITER });
+    await main.call("start_empty", "Jules");
+    await main.call("set_lock", "pin", CODE);
+    const sha = await setApk(4 * 1024 * 1024 + 3);
+    const version = fs.readFileSync(path.join(REPO, "VERSION"), "utf8").trim();
+
+    const qr = parseQr(await main.qr());
+    const client = new SyncClient({ qr, post: (u, b, t) => native.post(u, b, t), crypto, timeoutMs: TIMEOUT });
+    const info = { ...(await phone.sync_info()), app_version: "0.9.0" };
+    const err = await client.hello(info, { pair: null }).catch((e) => e);
+    assert.equal(err.code, "update_required", String(err && err.message));
+    assert.deepEqual(err.details, {
+      current: "0.9.0", available: version, size: 4 * 1024 * 1024 + 3, sha256: sha,
+      message: `Une nouvelle version de l'appli est disponible (0.9.0 → ${version}) : mets-la à jour pour synchroniser.`,
+    });
+    const bytes = await client.downloadApk();
+    assert.equal(bytes.length, 4 * 1024 * 1024 + 3);
+    assert.equal(require("node:crypto").createHash("sha256").update(bytes).digest("hex"), sha);
+    await native.installApk(bytes);
+    assert.equal(native.installed.length, 1);
+    const status = await main.call("sync_status");
+    assert.match(String(status.notice), /^✓ Appli envoyée à /);
+    await client.cancel();
+  } finally {
+    await main.call("sync_stop").catch(() => {});
     stop();
   }
 });

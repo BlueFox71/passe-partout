@@ -7,7 +7,7 @@
 // requêtes vers le PC : CapacitorHttp (natif, donc sans blocage du contenu mixte http:// par la WebView).
 // Codes d'erreur de unwrap : KEY_MISSING | KEY_INVALIDATED | BAD_BLOB | CANCELED | LOCKOUT | FAILED.
 // inNativeScreen() : vrai pendant un écran natif lancé par l'appli (scanner et sa demande de permission,
-// invite d'empreinte) ; boot.js ne compte pas ce temps comme « arrière-plan » (Ruling 23).
+// invite d'empreinte, installateur de la mise à jour et son écran d'autorisation) ; boot.js ne compte pas ce temps comme « arrière-plan » (Ruling 23).
 // Aucun secret n'est journalisé.
 (function (root) {
   const Cap = root.Capacitor;
@@ -33,6 +33,16 @@
     let s = "";
     for (const b of bytes) s += String.fromCharCode(b);
     return btoa(s);
+  }
+
+  // Base64 standard par blocs (multiples de 3 octets) : un APK de ~15 Mo sans concaténer octet par octet.
+  function b64Large(bytes) {
+    const CHUNK = 0x6000;
+    const parts = [];
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      parts.push(btoa(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))));
+    }
+    return parts.join("");
   }
 
   function unb64(str) {
@@ -230,6 +240,19 @@
         return r && typeof r.text === "string" ? r.text : null;
       } catch (e) {
         throw coded(e, ["CAMERA_DENIED", "FAILED"]);
+      }
+    },
+
+    // ------------------------------------------------------------ mise à jour de l'appli
+    // APK vérifié (octets) → cache de l'appli → installateur d'Android. Se termine au retour dans l'appli.
+    // Error.code « INSTALL_PERMISSION » : l'écran d'autorisation d'Android a été montré, réessayer ensuite.
+    // Error.code « INVALID_APK » : APK refusé (autre paquet, autre signature, version pas plus récente) ; rien d'installé.
+    async installApk(bytes) {
+      const data = b64Large(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      try {
+        await onScreen(() => PassePartout.installApk({ data }));
+      } catch (e) {
+        throw coded(e, ["INSTALL_PERMISSION", "INVALID_APK", "FAILED"]);
       }
     },
 

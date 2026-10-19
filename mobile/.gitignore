@@ -1,5 +1,6 @@
 node_modules/
 www/shared/
+www/js/version.js
 dist/
 # Signature : la clé et son mot de passe vivent hors dépôt (%APPDATA%\PassePartout\android-signing)
 *.jks

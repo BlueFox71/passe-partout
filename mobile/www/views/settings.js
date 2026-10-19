@@ -5,7 +5,6 @@
 (function () {
   const V = (PP.views.settings = {});
   const PPM = window.PPM;
-  PPM.VERSION = "0.1.0";
   const DELAYS = [1, 2, 5, 10, 15];
   const MIN_CHECK_MS = 500;
 

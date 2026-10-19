@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+<!-- FileProvider (AndroidManifest.xml) : seul le dossier des mises à jour reçues du PC est partagé,
+     avec l'installateur d'Android (PassePartoutPlugin.installApk). -->
+<paths>
+    <cache-path name="apk" path="apk/" />
 </paths>

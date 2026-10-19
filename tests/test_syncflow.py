@@ -10,6 +10,7 @@ from app.model import Account, Vault
 from app.store import VaultStore
 from app.sync import b64u, unb64u
 from app.syncflow import MAX_SKEW_SECONDS, SyncFlow, validate_phone_vault
+from app.version import VERSION
 from tests.conftest import sample_vault
 
 CODE = "123456"
@@ -43,13 +44,16 @@ class Env:
         self.lockout = Lockout(lambda: self.t)
         self.persisted = 0
         self.now = NOW
+        self.apk_bytes = b"PK faux APK " + bytes(range(256)) * 40
+        self.apk = tmp_path / "fake.apk"  # APK embarqué factice (None : aucun APK)
+        self.apk.write_bytes(self.apk_bytes)
 
     def persist(self):
         self.persisted += 1
 
     def flow(self):
         return SyncFlow(self.store, self.lockout, self.persist, lambda: self.config, "PC-Jules",
-                        now=lambda: self.now, qr_key=QR_KEY)
+                        now=lambda: self.now, qr_key=QR_KEY, apk_provider=lambda: self.apk)
 
 
 @pytest.fixture
@@ -60,7 +64,7 @@ def env(tmp_path):
 def hello_msg(env=None, **kw):
     msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel", "generation": GEN,
            "last_sync": iso(NOW - timedelta(days=1)), "code_version": env.store.code_version() if env else "x",
-           "has_data": True, "now": iso(NOW)}
+           "has_data": True, "now": iso(NOW), "app_version": VERSION}
     if env:
         msg["proof"] = proof(PAIR, b"pp-phone-hello")  # téléphone appairé
     msg.update(kw)
@@ -583,3 +587,111 @@ def test_pc_without_qr_key_never_skips_code(env):
                     qr_key=b"")
     r = flow.handle(hello_msg(env))
     assert r["need_code"] is True and "proof_pc" not in r
+
+
+# ---------------------------------------------------------------- version de l'appli (Le Grenier)
+OLD = "0.9.0"
+NEWER = "2.0.0"
+
+
+def test_hello_without_app_version_requires_update(env):     # Review Focus 1
+    msg = hello_msg(env)
+    del msg["app_version"]
+    flow = env.flow()
+    r = flow.handle(msg)
+    assert r["ok"] is False and r["error"] == "update_required"
+    assert r["message"] == "Mets à jour l'appli : sur le PC, Réglages → Installer l'appli sur le téléphone."
+    assert r["current"] is None and r["available"] == VERSION
+    assert r["size"] == len(env.apk_bytes) and r["sha256"] == hashlib.sha256(env.apk_bytes).hexdigest()
+    assert flow.notice == f"Pixel doit être mis à jour (ancienne version → {VERSION})"
+    # None vaut absence
+    r = env.flow().handle(hello_msg(env, app_version=None))
+    assert r["error"] == "update_required" and r["current"] is None
+
+
+def test_older_phone_gets_update_then_apk(env):
+    flow = env.flow()
+    assert flow.update_required is False
+    r = flow.handle(hello_msg(env, app_version=OLD, device_name="  Pixel de Jules  "))
+    assert flow.update_required is True
+    assert r == {"ok": False, "error": "update_required",
+                 "message": f"Une nouvelle version de l'appli est disponible ({OLD} → {VERSION}) : "
+                            "mets-la à jour pour synchroniser.",
+                 "current": OLD, "available": VERSION, "size": len(env.apk_bytes),
+                 "sha256": hashlib.sha256(env.apk_bytes).hexdigest()}
+    # rien du coffre, de l'appairage ni du code
+    assert flow.notice == f"Pixel de Jules doit être mis à jour ({OLD} → {VERSION})"
+    assert flow.device_name == "Pixel de Jules" and flow.summary is None
+    r = flow.handle({"type": "apk"})
+    assert set(r) == {"ok", "apk", "sha256", "version"}
+    assert r["ok"] is True and r["version"] == VERSION
+    assert unb64u(r["apk"]) == env.apk_bytes
+    assert r["sha256"] == hashlib.sha256(env.apk_bytes).hexdigest()
+    assert flow.notice == "✓ Appli envoyée à Pixel de Jules"
+    # un second hello reste refusé (un seul hello par session)
+    assert flow.handle(hello_msg(env))["error"] == "invalid"
+
+
+def test_sync_after_update_required_is_invalid(env):
+    flow = env.flow()
+    assert flow.handle(hello_msg(env, app_version=OLD))["error"] == "update_required"
+    r = flow.handle(sync_msg())
+    assert r["ok"] is False and r["error"] == "invalid" and "vault" not in r
+    r = flow.handle(sync_msg(code=CODE))
+    assert r["error"] == "invalid" and env.persisted == 0
+
+
+def test_apk_without_update_required_is_invalid(env):
+    assert env.flow().handle({"type": "apk"})["error"] == "invalid"
+    flow = known(env)  # même version : aucun APK à envoyer
+    r = flow.handle({"type": "apk"})
+    assert r["error"] == "invalid" and "apk" not in r
+
+
+def test_newer_phone_pc_outdated(env):
+    flow = env.flow()
+    r = flow.handle(hello_msg(env, app_version=NEWER))
+    assert r == {"ok": False, "error": "pc_outdated", "message": "Mets à jour Passe-Partout sur le PC (Le Grenier)."}
+    assert flow.update_required is False
+    assert flow.handle({"type": "apk"})["error"] == "invalid"
+    assert flow.handle(sync_msg())["error"] == "invalid"
+
+
+def test_same_version_syncs_normally(env):
+    flow = env.flow()
+    r = flow.handle(hello_msg(env, app_version=VERSION))
+    assert r["ok"] and r["mode"] == "merge" and not r["need_code"]
+    assert flow.notice is None
+    r = flow.handle(sync_msg())
+    assert r["ok"] is True and "vault" in r
+
+
+def test_update_required_without_embedded_apk(env):            # Review Focus 3
+    env.apk = None
+    flow = env.flow()
+    r = flow.handle(hello_msg(env, app_version=OLD))
+    assert r["error"] == "update_required" and r["size"] is None and r["sha256"] is None
+    assert r["available"] == VERSION
+    assert flow.handle({"type": "apk"})["error"] == "invalid"
+
+
+def test_apk_file_vanished_is_invalid(env):
+    flow = env.flow()
+    assert flow.handle(hello_msg(env, app_version=OLD))["error"] == "update_required"
+    env.apk.unlink()
+    assert flow.handle({"type": "apk"})["error"] == "invalid"
+
+
+@pytest.mark.parametrize("bad", [1, [], "1.0", "1.0.0.0", "v1.0.0", "", {}, True, 1.0])
+def test_app_version_wrong_type_invalid(env, bad):
+    flow = env.flow()
+    assert flow.handle(hello_msg(env, app_version=bad))["error"] == "invalid"
+    assert flow.handle(hello_msg(env))["ok"] is True  # un hello invalide ne consomme pas la session
+
+
+def test_version_checked_after_clock_and_lock(env):
+    r = env.flow().handle(hello_msg(env, app_version=OLD, now=iso(NOW + timedelta(minutes=10))))
+    assert r["error"] == "clock"
+    env.store.forget_key()
+    r = env.flow().handle(hello_msg(env, app_version=OLD))
+    assert r["error"] == "locked"

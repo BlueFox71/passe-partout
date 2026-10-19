@@ -8,6 +8,7 @@ from app import api as api_mod
 from app.api import Api
 from app.store import VaultStore
 from app.sync import AAD_REQ, AAD_RESP, SYNC_SECONDS, open_sealed, seal, unb64u
+from app.version import VERSION
 
 CODE = "123456"
 
@@ -71,7 +72,8 @@ def now_iso():
 
 def hello(**kw):
     msg = {"type": "hello", "device_id": "dev1", "device_name": "Pixel de Jules", "generation": None,
-           "last_sync": None, "code_version": None, "has_data": False, "now": now_iso()}
+           "last_sync": None, "code_version": None, "has_data": False, "now": now_iso(),
+           "app_version": VERSION}
     msg.update(kw)
     return msg
 
@@ -106,14 +108,15 @@ def test_sync_start_returns_qr_and_status_waiting(env, monkeypatch):
     assert len(env.key) == 32
     assert env.server.started and not env.server.stopped
     assert env.api.sync_status() == {"state": "waiting", "seconds_left": 120, "device": None,
-                                      "summary": None, "error": None}
+                                      "summary": None, "error": None, "notice": None, "update": False}
     env.clock.advance(30.5)
     assert env.api.sync_status()["seconds_left"] == 90
     assert any(abs(s - SYNC_SECONDS) < 1 for s, _ in env.timers)
 
 
 def test_status_without_session_is_closed(env):
-    assert env.api.sync_status()["state"] == "closed"
+    st = env.api.sync_status()
+    assert st["state"] == "closed" and st["notice"] is None
 
 
 def test_full_sync_then_status_done_and_server_stopped(env):
@@ -302,3 +305,38 @@ def test_unexpected_error_is_reported_in_status(env, monkeypatch):
     assert status == 500
     err = env.api.sync_status()["error"]
     assert err and "secret" not in err
+
+
+def test_update_required_sets_notice_not_error(env, tmp_path, monkeypatch):
+    apk = tmp_path / "fake.apk"
+    apk.write_bytes(b"PK faux apk")
+    monkeypatch.setattr(api_mod.apk_mod, "APK_OVERRIDE", apk)
+    env.api.sync_start()
+    status, r = env.send(hello(app_version="0.9.0"))
+    assert status == 200 and r["error"] == "update_required" and r["size"] == len(b"PK faux apk")
+    st = env.api.sync_status()
+    assert st["state"] == "syncing" and st["device"] == "Pixel de Jules" and st["error"] is None
+    assert st["notice"] == f"Pixel de Jules doit être mis à jour (0.9.0 → {VERSION})"
+    assert st["update"] is True
+    status, r = env.send({"type": "apk"})
+    assert status == 200 and r["ok"] and unb64u(r["apk"]) == b"PK faux apk"
+    st = env.api.sync_status()
+    assert st["state"] == "syncing" and not env.server.stopped  # l'APK ne ferme pas la session
+    assert st["notice"] == "✓ Appli envoyée à Pixel de Jules" and st["error"] is None
+    assert st["update"] is True
+
+
+def test_update_flag_false_without_update_required(env):
+    assert env.api.sync_status()["update"] is False  # fermée
+    env.api.sync_start()
+    assert env.api.sync_status()["update"] is False  # en attente
+    status, r = env.send(hello(app_version="99.0.0"))
+    assert r["error"] == "pc_outdated"
+    assert env.api.sync_status()["update"] is False  # refus pour une autre raison
+
+
+def test_pc_outdated_is_reported_as_error(env):
+    env.api.sync_start()
+    status, r = env.send(hello(app_version="99.0.0"))
+    assert r["error"] == "pc_outdated"
+    assert env.api.sync_status()["error"] == "Mets à jour Passe-Partout sur le PC (Le Grenier)."

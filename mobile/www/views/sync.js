@@ -5,7 +5,9 @@
    Le code saisi n'est jamais journalisé ni gardé après l'échange.
    Appairage (Ruling 21) : un téléphone appairé refuse un PC qui ne prouve pas le secret commun, avant
    d'envoyer code ou coffre (« Ré-appairer » oublie le secret local). Pendant l'envoi de la synchro, onglets
-   et bouton Retour sont bloqués (Ruling 22). */
+   et bouton Retour sont bloqués (Ruling 22).
+   Version : un PC d'une autre version refuse le hello. Plus récent → « Mettre à jour » télécharge l'APK dans
+   la même session (même client, jamais de second hello), vérifié par SHA-256, puis l'installateur d'Android. */
 (function () {
   const V = (PP.views.sync = {});
   const PPM = window.PPM;
@@ -187,6 +189,17 @@
       const pair = await PP.api.sync_pair(); // jamais envoyé : seule sa preuve part dans le hello
       hello = await client.hello(info, { pair });
     } catch (e) {
+      if (e && e.code === "update_required" && e.details) {
+        pending = client; // session gardée ouverte : « Mettre à jour » y demande l'APK
+        if (!live()) return abandon();
+        return updateScreen(client, e.details);
+      }
+      if (e && e.code === "pc_outdated") {
+        pending = client;
+        abandon(); // session terminée : le PC ne synchronisera pas ce téléphone
+        if (live()) startScreen(e.message);
+        return;
+      }
       if (e && e.code === "unpaired") {
         pending = client; // si c'est bien le PC, sa session est annulée en quittant cet écran
         if (!live()) return abandon();
@@ -270,6 +283,74 @@
     } catch (e) { /* état relu plus tard par PP.route */ }
     if (cur()) summaryScreen(hello.pc, reply.summary || {});
     return null;
+  }
+
+  // ------------------------------------------------------------ mise à jour de l'appli
+  // `d` : détails du refus (SyncClient) ; sans empreinte, le PC n'a pas d'APK : son message seul.
+  function updateScreen(client, d) {
+    if (!d.sha256) {
+      abandon();
+      return startScreen(d.message);
+    }
+    const from = d.current || PPM.VERSION || "?";
+    const { el, live } = paint(`
+      <h2>Mise à jour</h2>
+      <div class="warn-box">Une nouvelle version est disponible (${esc(from)} → ${esc(d.available)}) : mets-la à jour pour synchroniser.</div>
+      <div class="m-busy m-update-busy" id="busy" hidden><span class="m-spin" aria-hidden="true"></span><span>Téléchargement…</span></div>
+      <div class="err m-err" id="err"></div>
+      <div class="hint m-update-note" id="note"></div>
+      <button type="button" class="btn btn-primary m-wide" id="update">Mettre à jour</button>
+      <button type="button" class="m-link" id="cancel">Annuler</button>`);
+    const btn = el.querySelector("#update");
+    const busy = el.querySelector("#busy");
+    const err = el.querySelector("#err");
+    const note = el.querySelector("#note");
+    let apk = null; // octets vérifiés, gardés pour relancer l'installateur sans retélécharger
+
+    el.querySelector("#cancel").addEventListener("click", () => {
+      abandon();
+      startScreen();
+    });
+
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      err.textContent = "";
+      note.textContent = "";
+      if (!apk) {
+        busy.hidden = false;
+        try {
+          apk = await client.downloadApk();
+        } catch (e) {
+          if (!live()) return;
+          busy.hidden = true;
+          btn.disabled = false;
+          if (e && (e.code === "expired" || e.code === "forbidden")) {
+            pending = null; // session finie côté PC : il faut un nouveau QR
+            return startScreen(e.message);
+          }
+          err.textContent = e && e.code ? e.message : "Téléchargement impossible : réessaie.";
+          return;
+        }
+        if (!live()) return;
+        busy.hidden = true;
+      }
+      try {
+        await PP.mobile.native.installApk(apk);
+      } catch (e) {
+        if (!live()) return;
+        btn.disabled = false;
+        err.textContent = e && e.code === "INSTALL_PERMISSION"
+          ? "Autorise Passe-Partout à installer des applis, puis appuie à nouveau sur « Mettre à jour »."
+          : e && e.code === "INVALID_APK"
+            ? "Mise à jour invalide : elle ne vient pas de Passe-Partout."
+            : "L'installation n'a pas pu démarrer : réessaie.";
+        return;
+      }
+      if (!live()) return;
+      btn.disabled = false;
+      note.textContent = "Installe la mise à jour, puis rouvre Passe-Partout et relance la synchronisation.";
+    });
   }
 
   // ------------------------------------------------------------ PC non reconnu (Ruling 21)

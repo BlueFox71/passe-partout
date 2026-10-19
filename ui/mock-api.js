@@ -70,6 +70,7 @@
     { id: "d2", name: "Téléphone d'Alexis", last_sync: "2026-10-12T08:05:00" },
   ];
   let sync = null; // { t0 }
+  let apk = null;  // { t0 }
   const FAKE_QR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29" shape-rendering="crispEdges"><rect width="29" height="29" fill="#fff"/>' +
     [[2, 2], [20, 2], [2, 20]].map(([x, y]) => `<path d="M${x} ${y}h7v7h-7z" fill="#000"/><path d="M${x + 1} ${y + 1}h5v5h-5z" fill="#fff"/><path d="M${x + 2} ${y + 2}h3v3h-3z" fill="#000"/>`).join("") +
     Array.from({ length: 90 }, (_, i) => `<rect x="${10 + (i * 7) % 17}" y="${3 + (i * 11) % 24}" width="1" height="1" fill="#000"/>`).join("") + "</svg>";
@@ -200,15 +201,31 @@
     async open_backups_folder() { return {}; },
     async sync_start() { need(); sync = { t0: Date.now() }; return { qr: FAKE_QR, seconds: 120, hosts: ["192.168.1.20"] }; },
     async sync_status() {
-      if (!sync) return { state: "closed", seconds_left: 0, device: null, summary: null, error: null };
+      if (!sync) return { state: "closed", seconds_left: 0, device: null, summary: null, error: null, notice: null, update: false };
       const dt = (Date.now() - sync.t0) / 1000;
       const left = Math.max(0, Math.round(120 - dt));
-      if (dt < 1.5) return { state: "waiting", seconds_left: left, device: null, summary: null, error: null };
-      if (dt < 4) return { state: "syncing", seconds_left: left, device: "Pixel de Jules", summary: null, error: dt < 2.5 ? "Code incorrect, réessaie sur le téléphone." : null };
+      if (dt < 1.5) return { state: "waiting", seconds_left: left, device: null, summary: null, error: null, notice: null, update: false };
+      if (dt < 4) return { state: "syncing", seconds_left: left, device: "Pixel de Jules", summary: null, error: dt < 2.5 ? "Code incorrect, réessaie sur le téléphone." : null,
+        notice: dt < 3 ? "Pixel de Jules doit être mis à jour (1.0.0 → 1.1.0)" : "✓ Appli envoyée à Pixel de Jules", update: true };
       if (!devices.some((d) => d.id === "d1")) devices.unshift({ id: "d1", name: "Pixel de Jules", last_sync: now().slice(0, 19) });
-      return { state: "done", seconds_left: left, device: "Pixel de Jules", summary: { to_pc: 3, to_phone: 5, deleted: 1, conflicts: 1 }, error: null };
+      return { state: "done", seconds_left: left, device: "Pixel de Jules", summary: { to_pc: 3, to_phone: 5, deleted: 1, conflicts: 1 }, error: null, notice: "✓ Appli envoyée à Pixel de Jules", update: true };
     },
     async sync_stop() { sync = null; return {}; },
+    async get_app_info() { return { version: "1.0.0", apk: true }; },
+    async apk_install_start() {
+      need();
+      apk = { t0: Date.now() };
+      const urls = ["http://192.168.1.20:50200/abc123/passe-partout-1.0.0.apk", "http://10.0.0.5:50200/abc123/passe-partout-1.0.0.apk"];
+      return { qr: FAKE_QR, url: urls[0], urls, seconds: 300, version: "1.0.0" };
+    },
+    async apk_qr(url) { return FAKE_QR.replace("#fff", "#fff").replace("<rect ", '<rect data-u="' + url.length + '" '); },
+    async apk_install_status() {
+      if (!apk) return { state: "closed", seconds_left: 0, downloads: 0 };
+      const dt = (Date.now() - apk.t0) / 1000;
+      if (dt < 4) return { state: "waiting", seconds_left: Math.max(0, Math.round(300 - dt)), downloads: 0 };
+      return { state: "done", seconds_left: 0, downloads: 1 };
+    },
+    async apk_install_stop() { apk = null; return {}; },
     async list_devices() { return clone(devices); },
     async forget_device(id) { devices = devices.filter((d) => d.id !== id); return {}; },
     async replace_images(accs, cards) {

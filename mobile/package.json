@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "pretest": "node scripts/version.mjs",
     "test": "node --test \"test/*.test.js\"",
     "assemble": "node scripts/assemble.mjs"
   },

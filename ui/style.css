@@ -404,3 +404,11 @@ select.input option { background: #1a0b2e; }
 .sync-state.ok { color: var(--ok); }
 .sync-state.bad { color: #ff9db0; }
 .sync-err { color: #ff9db0; font-size: 13px; min-height: 16px; }
+.sync-notice { color: var(--cyan); font-size: 13px; min-height: 16px; }
+.sync-link { font-size: 13px; color: var(--cyan); }
+.apk-steps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; text-align: left; color: var(--muted); }
+.apk-steps li { display: flex; align-items: flex-start; gap: 10px; }
+.apk-steps li span { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--cyan); color: var(--cyan); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.apk-urls { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.apk-urls a { color: var(--cyan); }
+.app-version { text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0 10px; }

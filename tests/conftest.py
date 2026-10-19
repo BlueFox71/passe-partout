@@ -25,16 +25,19 @@ def scrypt_rapide_partout(monkeypatch):
 
 def sample_vault():
     from app.model import GiftCard, Profile, Vault
-    # date de création fixe : deux appels à cheval sur un changement de seconde donnent le même contenu
-    created = "2026-10-01T09:00:00"
+    # dates fixes (création et modification) : deux appels à cheval sur un changement de seconde donnent le
+    # même contenu
+    t = "2026-10-01T09:00:00"
     return Vault(
-        profiles=[Profile(id="p1", name="Jules"), Profile(id="p2", name="Alexis")],
+        profiles=[Profile(id="p1", name="Jules", updated=t), Profile(id="p2", name="Alexis", updated=t)],
         accounts=[
-            make_account("Boursorama", "Banque", "48213377", "Tr0mpette!Bleue", profiles=["p1"], created=created),
+            make_account("Boursorama", "Banque", "48213377", "Tr0mpette!Bleue", profiles=["p1"],
+                         created=t, updated=t),
             make_account("Netflix", "Streaming", "famille@exemple.fr", "Chill&Popcorn9", profiles=["p1", "p2"],
-                         created=created),
+                         created=t, updated=t),
         ],
-        giftcards=[GiftCard(id="g1", name="Fnac", code="1234", pin="99", remaining=50.0, profiles=["p1"])],
+        giftcards=[GiftCard(id="g1", name="Fnac", code="1234", pin="99", remaining=50.0, profiles=["p1"],
+                            updated=t)],
     )
 
 

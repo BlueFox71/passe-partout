@@ -6,12 +6,14 @@
 // préférences et clés (simule un redémarrage de l'appli). Sans `store` : localStorage s'il existe,
 // sinon PPM.nativeFake.memoryStore() (mémoire). PPM.nativeFake est lui-même une instance par défaut.
 // Commandes de test : setBiometricError(code|null), setUnwrapError(code|null), setBiometricAvailable(bool),
-// setNextQr(texte), firePause(), fireResume(), fireBack() ; `clipboard` = dernière copie {text, sensitive, seconds}.
+// setNextQr(texte), firePause(), fireResume(), fireBack(), setInstallError(code|null :
+// INSTALL_PERMISSION, INVALID_APK, FAILED) ; `clipboard` = dernière copie {text, sensitive, seconds} ;
+// `installed` = APK passés à installApk (copies des octets).
 // inNativeScreen() : vrai pendant un écran natif lancé par l'appli (scanner, empreinte), comme le natif réel
 // (Ruling 23 : ces écrans ne comptent pas comme arrière-plan pour le verrouillage à 30 s).
 // Codes d'erreur de unwrap, comme le natif réel : KEY_MISSING (clé absente ou effacée), BAD_BLOB (blob mal
 // formé ou d'une autre clé), KEY_INVALIDATED, CANCELED, LOCKOUT (trop d'essais d'empreinte), FAILED.
-// simulatePc({code, vault, lockMode, pinLength, pcName}) : PC simulé (aperçu et tests uniquement) ; scanQr
+// simulatePc({code, vault, lockMode, pinLength, pcName, appVersion, apk}) : PC simulé (aperçu et tests uniquement) ; scanQr
 // renvoie alors un nouveau QR de ce PC et post() lui répond comme app/syncflow.py (voir simulatedPc).
 (function (root) {
   const FILE = "pp.fake.file:";
@@ -82,6 +84,7 @@
     let nextQr = null;
     let simPc = null;
     let screens = 0; // écrans natifs ouverts par l'appli
+    let installError = null;
 
     // Exécute fn pendant un « écran natif » (le compteur couvre toute la durée de l'appel).
     async function onScreen(fn) {
@@ -110,6 +113,7 @@
     const fake = {
       store,
       clipboard: null,
+      installed: [],
 
       wrap(alias, bytes, { biometric = false } = {}) {
         const run = async () => {
@@ -209,6 +213,18 @@
         }
       },
 
+      // Installateur d'Android (écran natif, Ruling 23) : rien n'est installé, les octets sont gardés.
+      installApk(bytes) {
+        return onScreen(async () => {
+          await null; // l'installateur s'ouvre après l'appel
+          if (installError) throw nativeError(installError, installError === "INSTALL_PERMISSION"
+            ? "Autorise Passe-Partout à installer des applis."
+            : installError === "INVALID_APK" ? "Mise à jour invalide." : "Installation impossible.");
+          fake.installed.push(new Uint8Array(bytes));
+        });
+      },
+
+      setInstallError(code) { installError = code || null; },
       setBiometricError(code) { bioError = code || null; },
       setUnwrapError(code) { unwrapError = code || null; },
       setBiometricAvailable(v) { bioAvailable = Boolean(v); },
@@ -230,8 +246,15 @@
   const SIM_KINDS = { profiles: "profile", accounts: "account", giftcards: "giftcard" };
   const SIM_INVALID = "Message de synchronisation invalide.";
 
-  function simulatedPc({ code, vault, lockMode = "pin", pinLength, pcName = "PC simulé" } = {}) {
+  // Version (Tâche 4) : téléphone sans version ou plus ancien que `appVersion` → update_required (APK `apk`
+  // demandable par « apk », plusieurs fois) ; plus récent → pc_outdated. Le hello est alors consommé.
+  function simulatedPc({ code, vault, lockMode = "pin", pinLength, pcName = "PC simulé", appVersion, apk = null } = {}) {
     const C = root.PPM && root.PPM.crypto ? root.PPM.crypto : require("./crypto.js");
+    if (!root.PPM || !root.PPM.compareVersions) require("./syncclient.js");
+    if (!root.PPM.VERSION && typeof require === "function") require("./version.js");
+    const pcVersion = appVersion || root.PPM.VERSION;
+    const apkBytes = apk ? new Uint8Array(apk) : null;
+    let apkSha = null;
     const clone = (x) => JSON.parse(JSON.stringify(x));
     let pcVault = { profiles: [], accounts: [], giftcards: [], deleted: [], ...clone(vault || {}) };
     delete pcVault.version;
@@ -248,8 +271,43 @@
       lock_mode: lockMode, pin_length: lockMode === "pin" ? (pinLength || pcCode.length) : null,
     });
 
+    async function sha256Hex(bytes) {
+      const d = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+      return Array.from(d, (x) => x.toString(16).padStart(2, "0")).join("");
+    }
+
+    // null si même version, sinon la réponse de refus (comme SyncFlow._check_app_version)
+    async function checkVersion(msg) {
+      const v = msg.app_version ?? null;
+      let cmp;
+      try {
+        cmp = v === null ? -1 : root.PPM.compareVersions(v, pcVersion);
+      } catch (e) {
+        return refuse("invalid", SIM_INVALID);
+      }
+      if (cmp === 0) return null;
+      if (cmp > 0) {
+        session.hello = { blocked: "pc_outdated" };
+        return refuse("pc_outdated", "Mets à jour Passe-Partout sur le PC (Le Grenier).");
+      }
+      session.hello = { blocked: "update_required" };
+      if (apkBytes && !apkSha) apkSha = await sha256Hex(apkBytes);
+      const message = v === null
+        ? "Mets à jour l'appli : sur le PC, Réglages → Installer l'appli sur le téléphone."
+        : `Une nouvelle version de l'appli est disponible (${v} → ${pcVersion}) : mets-la à jour pour synchroniser.`;
+      return refuse("update_required", message, { current: v, available: pcVersion,
+        size: apkBytes ? apkBytes.length : null, sha256: apkBytes ? apkSha : null });
+    }
+
+    async function sendApk() {
+      if (!session.hello || session.hello.blocked !== "update_required" || !apkBytes) return refuse("invalid", SIM_INVALID);
+      return { ok: true, apk: C.b64u(apkBytes), sha256: apkSha, version: pcVersion };
+    }
+
     async function hello(msg) {
       if (session.hello) return refuse("invalid", SIM_INVALID);
+      const blocked = await checkVersion(msg);
+      if (blocked) return blocked;
       const pair = devices.get(msg.device_id);
       let proven = false;
       if (pair && typeof msg.proof === "string" && msg.proof) {
@@ -295,7 +353,7 @@
 
     function sync(msg) {
       const h = session.hello;
-      if (!h || msg.device_id !== h.device_id || msg.replace !== (h.mode === "replace")
+      if (!h || h.blocked || msg.device_id !== h.device_id || msg.replace !== (h.mode === "replace")
         || (msg.last_sync ?? null) !== h.last_sync) {
         return refuse("invalid", SIM_INVALID);
       }
@@ -336,6 +394,7 @@
       }
       if (msg.type === "hello") return hello(msg);
       if (msg.type === "sync") return sync(msg);
+      if (msg.type === "apk") return sendApk();
       return refuse("invalid", SIM_INVALID);
     }
 
