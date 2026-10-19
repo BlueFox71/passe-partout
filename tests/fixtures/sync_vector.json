@@ -1,0 +1,10 @@
+{
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "nonce": "ZGVmZ2hpamtsbW5v",
+  "aad": "pp-sync-v1:req",
+  "plaintext": {
+    "type": "hello",
+    "nom": "Café €"
+  },
+  "body": "{\"n\":\"ZGVmZ2hpamtsbW5v\",\"c\":\"MzmqHwmMdKQcCjqEtgpI0WCsaWepVtExxrdv4dtBJ-S2lC6yWJ683ovLsbnhAA1F9OU\"}"
+}
