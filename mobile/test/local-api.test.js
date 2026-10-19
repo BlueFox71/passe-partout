@@ -1,0 +1,306 @@
+// Tests du coffre local du téléphone (LocalApi) avec le natif simulé.
+const test = require("node:test");
+const assert = require("node:assert");
+const LocalApi = require("../www/js/local-api.js");
+const nativeFake = require("../www/js/native-fake.js");
+
+const T0 = "2026-10-19T10:00:00";
+const SECRET = "S3cret-EnClair!";
+const ITER = 1000; // PBKDF2 réduit pour les tests
+
+// Réponse de synchro réussie du PC (forme de SyncFlow._on_sync).
+function pcResp(over = {}) {
+  return {
+    ok: true,
+    vault: {
+      version: 1,
+      profiles: [{ id: "p1", name: "Moi", avatar: null, color: "#ff3d9a", updated: T0 }],
+      accounts: [{
+        id: "a1", name: "Banque", category: "Finance", login: "jules", password: SECRET,
+        login_mask: null, password_mask: null, image: null, favorite: false, profiles: ["p1"],
+        created: T0, updated: T0,
+      }],
+      giftcards: [{
+        id: "g1", name: "Fnac", code: "123", pin: "", initial: 50, remaining: 50, end_date: null,
+        image: null, profiles: ["p1"], history: [], updated: T0,
+      }],
+      deleted: [],
+    },
+    summary: { to_pc: 0, to_phone: 3, deleted: 0, conflicts: 0 },
+    code_version: "cv1",
+    generation: "gen1",
+    synced_at: T0,
+    lock_mode: "pin",
+    pin_length: 4,
+    ...over,
+  };
+}
+
+function setup(store = nativeFake.memoryStore()) {
+  const clk = { now: new Date(2026, 9, 19, 12, 0, 0).getTime() };
+  const native = nativeFake.create({ store });
+  const api = new LocalApi({ native, clock: () => clk.now, iterations: ITER });
+  return { api, native, store, clk };
+}
+
+async function synced(code = "1234") {
+  const s = setup();
+  await s.api.apply_sync(pcResp(), code);
+  return s;
+}
+
+test("avant la première synchro : pas de données, pas verrouillé", async () => {
+  const { api } = setup();
+  const s = await api.get_state();
+  assert.equal(s.has_data, false);
+  assert.equal(s.locked, false);
+  assert.equal(s.corrupt, false);
+  assert.equal(s.lock_mode, "none");
+  assert.deepEqual(s.profiles, []);
+  assert.equal(s.biometric, false);
+  const info = await api.sync_info();
+  assert.match(info.device_id, /^[0-9a-f]{32}$/);
+  assert.equal(info.has_data, false);
+  assert.equal(info.generation, null);
+  assert.equal(info.last_sync, null);
+  assert.equal(info.code_version, null);
+  assert.equal(typeof info.device_name, "string");
+  assert.equal(info.now, "2026-10-19T12:00:00");
+  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], deleted: [] });
+});
+
+test("device_id créé une fois et conservé", async () => {
+  const { api, store } = setup();
+  const id = (await api.sync_info()).device_id;
+  const again = setup(store).api;
+  assert.equal((await again.sync_info()).device_id, id);
+});
+
+test("après apply_sync(premier, '1234') : unlock('1234') ok, unlock('0000') refusé", async () => {
+  const { api, clk } = await synced();
+  let s = await api.get_state();
+  assert.equal(s.has_data, true);
+  assert.equal(s.locked, false);
+  assert.equal(s.lock_mode, "pin");
+  assert.equal(s.pin_length, 4);
+  assert.equal(s.profiles.length, 1);
+  await api.lock();
+  assert.equal((await api.get_state()).locked, true);
+  assert.deepEqual(await api.unlock("0000"), { ok: false, wait_seconds: 1, error: "bad_code" });
+  clk.now += 1000;
+  assert.deepEqual(await api.unlock("1234"), { ok: true, wait_seconds: 0 });
+  s = await api.get_state();
+  assert.equal(s.locked, false);
+  const accs = await api.list_accounts(null);
+  assert.equal(accs[0].password, SECRET);
+  const info = await api.sync_info();
+  assert.equal(info.generation, "gen1");
+  assert.equal(info.code_version, "cv1");
+  assert.equal(info.last_sync, T0);
+  assert.equal(info.has_data, true);
+});
+
+test("délai anti-essais : 1 s puis 2 s, conservé par une nouvelle instance sur les mêmes préférences", async () => {
+  const { api, store, clk } = await synced();
+  await api.lock();
+  assert.equal((await api.unlock("0000")).wait_seconds, 1);
+  // pendant l'attente, même le bon code est refusé sans être essayé
+  assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 1, error: "bad_code" });
+  clk.now += 1000;
+  assert.equal((await api.unlock("9999")).wait_seconds, 2);
+  // « redémarrage » de l'appli : nouvelle instance, mêmes préférences
+  const native2 = nativeFake.create({ store });
+  const api2 = new LocalApi({ native: native2, clock: () => clk.now, iterations: ITER });
+  assert.equal((await api2.get_state()).locked, true);
+  assert.deepEqual(await api2.unlock("1234"), { ok: false, wait_seconds: 2, error: "bad_code" });
+  clk.now += 2000;
+  assert.deepEqual(await api2.unlock("1234"), { ok: true, wait_seconds: 0 });
+  assert.deepEqual(await native2.getPref("pp.lockout"), { fails: 0, until: 0 });
+});
+
+test("vault.enc ne contient pas le mot de passe en clair", async () => {
+  const { native } = await synced();
+  const raw = await native.readFile("vault.enc");
+  assert.ok(raw && raw.length > 0);
+  assert.ok(!raw.includes(SECRET));
+  assert.ok(!raw.includes("jules"));
+  const keys = JSON.parse(await native.readFile("keys.json"));
+  // la clé protégée par le code passe aussi par le Keystore (blob du natif, pas le JSON en clair)
+  assert.equal(typeof keys.code, "string");
+  assert.ok(!keys.code.includes("salt"));
+  assert.ok(nativeFake.isFakeBlob(keys.code, "pp-device"));
+  assert.equal(keys.bio, undefined);
+});
+
+test("lock() : list_accounts lève « Coffre verrouillé »", async () => {
+  const { api } = await synced();
+  await api.lock();
+  for (const call of [
+    () => api.list_accounts(null), () => api.list_giftcards(null), () => api.get_settings(),
+    () => api.save_account({ name: "X", profiles: ["p1"] }), () => api.delete_account("a1"),
+    () => api.spend("g1", 1), () => api.sync_payload(),
+  ]) {
+    await assert.rejects(call(), (e) => e instanceof Error && e.message === "Coffre verrouillé");
+  }
+  const s = await api.get_state();
+  assert.deepEqual(s.profiles, []);
+});
+
+test("empreinte : activée puis unlock_biometric ok ; KEY_INVALIDATED → biometric désactivé, error 'bio_invalidated'", async () => {
+  const { api, native } = await synced();
+  assert.deepEqual(await api.get_settings(), { autolock_minutes: 5, biometric: false });
+  const st = await api.save_settings({ biometric: true });
+  assert.equal(st.biometric, true);
+  const keys = JSON.parse(await native.readFile("keys.json"));
+  assert.ok(nativeFake.isFakeBlob(keys.bio, "pp-bio"));
+  assert.equal((await api.get_state()).biometric, true);
+
+  await api.lock();
+  assert.deepEqual(await api.unlock_biometric(), { ok: true });
+  assert.equal((await api.list_accounts(null)).length, 1);
+
+  await api.lock();
+  native.setBiometricError("CANCELED");
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "canceled" });
+  assert.equal((await api.get_state()).biometric, true); // annuler ne désactive rien
+
+  native.setBiometricError("KEY_INVALIDATED");
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "bio_invalidated" });
+  const s = await api.get_state();
+  assert.equal(s.biometric, false);
+  assert.equal(s.locked, true);
+  assert.equal(JSON.parse(await native.readFile("keys.json")).bio, undefined);
+  // le code marche toujours
+  assert.equal((await api.unlock("1234")).ok, true);
+  assert.equal((await api.get_settings()).biometric, false);
+});
+
+test("save_settings : délai de verrouillage et désactivation de l'empreinte", async () => {
+  const { api, native } = await synced();
+  assert.equal((await api.save_settings({ autolock_minutes: "10" })).autolock_minutes, 10);
+  await api.save_settings({ biometric: true });
+  assert.deepEqual(await api.save_settings({ biometric: false }), { autolock_minutes: 10, biometric: false });
+  assert.equal(JSON.parse(await native.readFile("keys.json")).bio, undefined);
+  native.setBiometricAvailable(false);
+  await assert.rejects(api.save_settings({ biometric: true }), /empreinte/i);
+});
+
+test("code changé sur le PC : apply_sync(resp, '5678') → nouveau code ok, ancien refusé, données intactes", async () => {
+  const { api, clk } = await synced();
+  await api.save_account({ name: "Mail", login: "j@x.fr", password: "pw2", profiles: ["p1"] });
+  const payload = await api.sync_payload();
+  const resp = pcResp({
+    code_version: "cv2", synced_at: "2026-10-19T12:00:00", lock_mode: "password", pin_length: null,
+  });
+  resp.vault.accounts = payload.accounts;
+  await api.apply_sync(resp, "5678");
+  assert.equal((await api.sync_info()).code_version, "cv2");
+  const st = await api.get_state();
+  assert.equal(st.lock_mode, "password");
+  assert.equal(st.pin_length, null);
+  await api.lock();
+  assert.equal((await api.unlock("1234")).ok, false);
+  clk.now += 1000;
+  assert.equal((await api.unlock("5678")).ok, true);
+  const names = (await api.list_accounts(null)).map((a) => a.name);
+  assert.deepEqual(names, ["Banque", "Mail"]);
+});
+
+test("apply_sync sans code garde le code ; lock_mode inconnu accepté", async () => {
+  const { api } = await synced();
+  await api.apply_sync(pcResp({ lock_mode: "unknown", pin_length: null, generation: null }), null);
+  const st = await api.get_state();
+  assert.equal(st.lock_mode, "unknown");
+  assert.equal((await api.sync_info()).generation, null);
+  await api.lock();
+  assert.equal((await api.unlock("1234")).ok, true);
+});
+
+test("apply_sync : premier lancement sans code refusé, réponse invalide refusée", async () => {
+  const { api } = setup();
+  await assert.rejects(api.apply_sync(pcResp(), null), /code/i);
+  await assert.rejects(api.apply_sync({ ok: true, vault: null }, "1234"), /invalide/i);
+  assert.equal((await api.get_state()).has_data, false);
+});
+
+test("apply_sync écrit vault.enc, puis keys.json, puis pp.meta", async () => {
+  const { api, native } = setup();
+  const order = [];
+  const wf = native.writeFileAtomic.bind(native);
+  const sp = native.setPref.bind(native);
+  native.writeFileAtomic = async (name, text) => { order.push(name); return wf(name, text); };
+  native.setPref = async (key, value) => { order.push(key); return sp(key, value); };
+  await api.sync_info(); // crée le device_id avant la synchro
+  order.length = 0;
+  await api.apply_sync(pcResp(), "1234");
+  assert.deepEqual(order.filter((x) => ["vault.enc", "keys.json", "pp.meta"].includes(x)),
+    ["vault.enc", "keys.json", "pp.meta"]);
+});
+
+test("delete_account puis sync_payload contient la pierre tombale", async () => {
+  const { api } = await synced();
+  await api.delete_account("a1");
+  const p = await api.sync_payload();
+  assert.deepEqual(Object.keys(p).sort(), ["accounts", "deleted", "giftcards", "profiles"]);
+  assert.equal(p.accounts.length, 0);
+  assert.equal(p.deleted.length, 1);
+  assert.equal(p.deleted[0].kind, "account");
+  assert.equal(p.deleted[0].id, "a1");
+  // daté après la dernière synchro (contrat d'horodatage)
+  assert.ok(p.deleted[0].at > T0);
+});
+
+test("modifications : horodatées après last_sync et réécrites dans vault.enc", async () => {
+  const { api, native, clk } = await synced();
+  clk.now = new Date(2026, 9, 19, 9, 0, 0).getTime(); // horloge du téléphone en retard sur le PC
+  const before = await native.readFile("vault.enc");
+  const a = await api.save_account({ id: "a1", name: "Banque 2", password: "x", profiles: ["p1"] });
+  assert.equal(a.updated, "2026-10-19T10:00:01");
+  assert.notEqual(await native.readFile("vault.enc"), before);
+  const g = await api.spend("g1", 12.5);
+  assert.equal(g.remaining, 37.5);
+  assert.equal(g.history[0].date, "2026-10-19");
+  assert.equal(g.updated, "2026-10-19T10:00:01");
+  await api.save_giftcard({ name: "Cadhoc", remaining: 20, profiles: ["p1"] });
+  await api.delete_giftcard("g1");
+  // relu depuis le disque par une nouvelle instance
+  const { store } = native;
+  const api2 = new LocalApi({ native: nativeFake.create({ store }), clock: () => clk.now, iterations: ITER });
+  assert.equal((await api2.unlock("1234")).ok, true);
+  assert.equal((await api2.list_accounts(null))[0].name, "Banque 2");
+  assert.deepEqual((await api2.list_giftcards(null)).map((x) => x.name), ["Cadhoc"]);
+  // la liste renvoyée est une copie : la modifier ne touche pas le coffre
+  (await api2.list_accounts(null))[0].name = "zz";
+  assert.equal((await api2.list_accounts(null))[0].name, "Banque 2");
+});
+
+test("erreurs de validation en français", async () => {
+  const { api } = await synced();
+  await assert.rejects(api.save_account({ name: " ", profiles: ["p1"] }), /Le nom est obligatoire/);
+  await assert.rejects(api.spend("g1", 999), /Montant supérieur au solde restant/);
+});
+
+test("copy_secret / copy_plain passent par le natif", async () => {
+  const { api, native } = await synced();
+  assert.deepEqual(await api.copy_secret("pw"), {});
+  assert.deepEqual(native.clipboard, { text: "pw", sensitive: true, seconds: 30 });
+  await api.copy_plain("login");
+  assert.deepEqual(native.clipboard, { text: "login", sensitive: false, seconds: null });
+});
+
+test("nativeFake : wrap réversible mais pas identité ; deleteKey rend l'ancien blob illisible", async () => {
+  const n = nativeFake.create();
+  const bytes = new Uint8Array([1, 2, 3, 250]);
+  const blob = await n.wrap("pp-device", bytes);
+  assert.equal(typeof blob, "string");
+  assert.ok(nativeFake.isFakeBlob(blob, "pp-device"));
+  assert.deepEqual(await n.unwrap("pp-device", blob), bytes);
+  await assert.rejects(n.unwrap("pp-autre", blob), { code: "FAILED" });
+  await n.deleteKey("pp-device");
+  await assert.rejects(n.unwrap("pp-device", blob), { code: "FAILED" });
+  assert.equal(await n.readFile("absent"), null);
+  assert.equal(await n.getPref("absent"), null);
+  assert.equal(await n.scanQr(), null);
+  n.setNextQr("pp://x");
+  assert.equal(await n.scanQr(), "pp://x");
+});
