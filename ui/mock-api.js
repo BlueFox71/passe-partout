@@ -201,14 +201,14 @@
     async open_backups_folder() { return {}; },
     async sync_start() { need(); sync = { t0: Date.now() }; return { qr: FAKE_QR, seconds: 120, hosts: ["192.168.1.20"] }; },
     async sync_status() {
-      if (!sync) return { state: "closed", seconds_left: 0, device: null, summary: null, error: null, notice: null };
+      if (!sync) return { state: "closed", seconds_left: 0, device: null, summary: null, error: null, notice: null, update: false };
       const dt = (Date.now() - sync.t0) / 1000;
       const left = Math.max(0, Math.round(120 - dt));
-      if (dt < 1.5) return { state: "waiting", seconds_left: left, device: null, summary: null, error: null, notice: null };
+      if (dt < 1.5) return { state: "waiting", seconds_left: left, device: null, summary: null, error: null, notice: null, update: false };
       if (dt < 4) return { state: "syncing", seconds_left: left, device: "Pixel de Jules", summary: null, error: dt < 2.5 ? "Code incorrect, réessaie sur le téléphone." : null,
-        notice: dt < 3 ? "Le téléphone de Pixel de Jules doit être mis à jour (1.0.0 → 1.1.0)" : "✓ Appli envoyée au téléphone de Pixel de Jules" };
+        notice: dt < 3 ? "Pixel de Jules doit être mis à jour (1.0.0 → 1.1.0)" : "✓ Appli envoyée à Pixel de Jules", update: true };
       if (!devices.some((d) => d.id === "d1")) devices.unshift({ id: "d1", name: "Pixel de Jules", last_sync: now().slice(0, 19) });
-      return { state: "done", seconds_left: left, device: "Pixel de Jules", summary: { to_pc: 3, to_phone: 5, deleted: 1, conflicts: 1 }, error: null, notice: "✓ Appli envoyée au téléphone de Pixel de Jules" };
+      return { state: "done", seconds_left: left, device: "Pixel de Jules", summary: { to_pc: 3, to_phone: 5, deleted: 1, conflicts: 1 }, error: null, notice: "✓ Appli envoyée à Pixel de Jules", update: true };
     },
     async sync_stop() { sync = null; return {}; },
     async get_app_info() { return { version: "1.0.0", apk: true }; },

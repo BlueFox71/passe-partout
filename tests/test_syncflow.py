@@ -603,7 +603,7 @@ def test_hello_without_app_version_requires_update(env):     # Review Focus 1
     assert r["message"] == "Mets à jour l'appli : sur le PC, Réglages → Installer l'appli sur le téléphone."
     assert r["current"] is None and r["available"] == VERSION
     assert r["size"] == len(env.apk_bytes) and r["sha256"] == hashlib.sha256(env.apk_bytes).hexdigest()
-    assert flow.notice == f"Le téléphone de Pixel doit être mis à jour (ancienne version → {VERSION})"
+    assert flow.notice == f"Pixel doit être mis à jour (ancienne version → {VERSION})"
     # None vaut absence
     r = env.flow().handle(hello_msg(env, app_version=None))
     assert r["error"] == "update_required" and r["current"] is None
@@ -611,21 +611,23 @@ def test_hello_without_app_version_requires_update(env):     # Review Focus 1
 
 def test_older_phone_gets_update_then_apk(env):
     flow = env.flow()
+    assert flow.update_required is False
     r = flow.handle(hello_msg(env, app_version=OLD, device_name="  Pixel de Jules  "))
+    assert flow.update_required is True
     assert r == {"ok": False, "error": "update_required",
                  "message": f"Une nouvelle version de l'appli est disponible ({OLD} → {VERSION}) : "
                             "mets-la à jour pour synchroniser.",
                  "current": OLD, "available": VERSION, "size": len(env.apk_bytes),
                  "sha256": hashlib.sha256(env.apk_bytes).hexdigest()}
     # rien du coffre, de l'appairage ni du code
-    assert flow.notice == f"Le téléphone de Pixel de Jules doit être mis à jour ({OLD} → {VERSION})"
+    assert flow.notice == f"Pixel de Jules doit être mis à jour ({OLD} → {VERSION})"
     assert flow.device_name == "Pixel de Jules" and flow.summary is None
     r = flow.handle({"type": "apk"})
     assert set(r) == {"ok", "apk", "sha256", "version"}
     assert r["ok"] is True and r["version"] == VERSION
     assert unb64u(r["apk"]) == env.apk_bytes
     assert r["sha256"] == hashlib.sha256(env.apk_bytes).hexdigest()
-    assert flow.notice == "✓ Appli envoyée au téléphone de Pixel de Jules"
+    assert flow.notice == "✓ Appli envoyée à Pixel de Jules"
     # un second hello reste refusé (un seul hello par session)
     assert flow.handle(hello_msg(env))["error"] == "invalid"
 
@@ -650,6 +652,7 @@ def test_newer_phone_pc_outdated(env):
     flow = env.flow()
     r = flow.handle(hello_msg(env, app_version=NEWER))
     assert r == {"ok": False, "error": "pc_outdated", "message": "Mets à jour Passe-Partout sur le PC (Le Grenier)."}
+    assert flow.update_required is False
     assert flow.handle({"type": "apk"})["error"] == "invalid"
     assert flow.handle(sync_msg())["error"] == "invalid"
 

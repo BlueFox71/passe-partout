@@ -254,7 +254,7 @@ def test_old_phone_gets_apk_over_http(pc, tmp_path, monkeypatch):
         assert r["ok"] and r["version"] == VERSION
         got = unb64u(r["apk"])
         assert got == data and hashlib.sha256(got).hexdigest() == r["sha256"] == h["sha256"]
-        assert pc.api.sync_status()["notice"] == "✓ Appli envoyée au téléphone de Pixel A"
+        assert pc.api.sync_status()["notice"] == "✓ Appli envoyée à Pixel A"
         assert phone._post({"type": "cancel"})["ok"]
         assert pc.api.sync_status()["state"] == "closed"
     finally:

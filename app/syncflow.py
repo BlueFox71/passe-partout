@@ -238,6 +238,11 @@ class SyncFlow:
         self.summary: dict | None = None
         self.notice: str | None = None  # information pour l'écran du PC (mise à jour du téléphone)
 
+    @property
+    def update_required(self) -> bool:
+        """Vrai si le téléphone a été refusé parce que son appli est trop ancienne (« update_required »)."""
+        return self._blocked == "update_required"
+
     def handle(self, msg: dict) -> dict:
         """Aiguille un message déchiffré du téléphone sur « hello », « sync » ou « cancel »."""
         kind = msg.get("type") if isinstance(msg, dict) else None
@@ -366,8 +371,7 @@ class SyncFlow:
         else:
             message = (f"Une nouvelle version de l'appli est disponible ({app_version} → {VERSION}) : "
                        "mets-la à jour pour synchroniser.")
-        self.notice = (f"Le téléphone de {device_name} doit être mis à jour "
-                       f"({app_version or 'ancienne version'} → {VERSION})")
+        self.notice = f"{device_name} doit être mis à jour ({app_version or 'ancienne version'} → {VERSION})"
         raise _Refused("update_required", message, current=app_version, available=VERSION,
                        size=info["size"] if info else None, sha256=info["sha256"] if info else None)
 
@@ -385,7 +389,7 @@ class SyncFlow:
         sha256 = hashlib.sha256(data).hexdigest()  # empreinte des octets réellement envoyés
         encoded = b64u(data)
         del data  # ~11 Mo : seule la version encodée reste en mémoire jusqu'au chiffrement
-        self.notice = f"✓ Appli envoyée au téléphone de {self.device_name}"
+        self.notice = f"✓ Appli envoyée à {self.device_name}"
         return {"ok": True, "apk": encoded, "sha256": sha256, "version": VERSION}
 
     # ------------------------------------------------------------ sync

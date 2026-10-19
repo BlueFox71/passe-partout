@@ -108,7 +108,7 @@ def test_sync_start_returns_qr_and_status_waiting(env, monkeypatch):
     assert len(env.key) == 32
     assert env.server.started and not env.server.stopped
     assert env.api.sync_status() == {"state": "waiting", "seconds_left": 120, "device": None,
-                                      "summary": None, "error": None, "notice": None}
+                                      "summary": None, "error": None, "notice": None, "update": False}
     env.clock.advance(30.5)
     assert env.api.sync_status()["seconds_left"] == 90
     assert any(abs(s - SYNC_SECONDS) < 1 for s, _ in env.timers)
@@ -316,12 +316,23 @@ def test_update_required_sets_notice_not_error(env, tmp_path, monkeypatch):
     assert status == 200 and r["error"] == "update_required" and r["size"] == len(b"PK faux apk")
     st = env.api.sync_status()
     assert st["state"] == "syncing" and st["device"] == "Pixel de Jules" and st["error"] is None
-    assert st["notice"] == f"Le téléphone de Pixel de Jules doit être mis à jour (0.9.0 → {VERSION})"
+    assert st["notice"] == f"Pixel de Jules doit être mis à jour (0.9.0 → {VERSION})"
+    assert st["update"] is True
     status, r = env.send({"type": "apk"})
     assert status == 200 and r["ok"] and unb64u(r["apk"]) == b"PK faux apk"
     st = env.api.sync_status()
     assert st["state"] == "syncing" and not env.server.stopped  # l'APK ne ferme pas la session
-    assert st["notice"] == "✓ Appli envoyée au téléphone de Pixel de Jules" and st["error"] is None
+    assert st["notice"] == "✓ Appli envoyée à Pixel de Jules" and st["error"] is None
+    assert st["update"] is True
+
+
+def test_update_flag_false_without_update_required(env):
+    assert env.api.sync_status()["update"] is False  # fermée
+    env.api.sync_start()
+    assert env.api.sync_status()["update"] is False  # en attente
+    status, r = env.send(hello(app_version="99.0.0"))
+    assert r["error"] == "pc_outdated"
+    assert env.api.sync_status()["update"] is False  # refus pour une autre raison
 
 
 def test_pc_outdated_is_reported_as_error(env):

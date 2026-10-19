@@ -196,7 +196,7 @@ test("vrai PC : téléphone 0.9.0 → mise à jour exigée, APK reçu dans la se
     await native.installApk(bytes);
     assert.equal(native.installed.length, 1);
     const status = await main.call("sync_status");
-    assert.match(String(status.notice), /^✓ Appli envoyée au téléphone de /);
+    assert.match(String(status.notice), /^✓ Appli envoyée à /);
     await client.cancel();
   } finally {
     await main.call("sync_stop").catch(() => {});

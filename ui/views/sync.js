@@ -86,6 +86,7 @@
       if (!st) { timer = setTimeout(tick, 500); return; }
       const count = $("#sy-count");
       $("#sy-notice").textContent = st.notice || "";
+      if (st.update) $("#sy-install").style.display = ""; // téléphone refusé car trop ancien
       $("#sy-err").textContent = st.state === "syncing" || st.state === "waiting" ? st.error || "" : "";
       if (st.state === "waiting" || st.state === "syncing") {
         count.textContent = mmss(st.seconds_left || 0);

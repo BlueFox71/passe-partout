@@ -692,11 +692,12 @@ class Api:
             run = self._sync
             if run is None:
                 return {"state": "closed", "seconds_left": 0, "device": None, "summary": None, "error": None,
-                        "notice": None}
+                        "notice": None, "update": False}
             state = run.session.status  # lu sans le verrou de session
             left = max(0, math.ceil(run.deadline - self._clock())) if state in ("waiting", "syncing") else 0
             out = {"state": state, "seconds_left": left, "device": run.flow.device_name,
-                   "summary": run.flow.summary, "error": run.error, "notice": run.flow.notice}
+                   "summary": run.flow.summary, "error": run.error, "notice": run.flow.notice,
+                   "update": run.flow.update_required}  # téléphone trop ancien : lien « Installer l'appli »
             server = None
             if state not in ("waiting", "syncing"):
                 server, run.server = run.server, None  # usage unique : plus rien à servir
