@@ -14,6 +14,7 @@
   let accounts = []; // comptes du profil affiché (déchiffrés : oubliés au verrouillage)
   let seq = 0; // jeton d'affichage de l'onglet : une réponse arrivée après un nouvel affichage est ignorée
   let sheetSeq = 0; // jeton de la fiche / du formulaire affiché par-dessus la liste
+  let loadSeq = 0; // jeton de chargement : seule la réponse du dernier list_accounts est affichée
   let current = null; // compte de la fiche ouverte
   let revealed = false; // mot de passe affiché en clair sur la fiche
 
@@ -110,13 +111,14 @@
   };
 
   async function load(token = seq) {
+    const mine = ++loadSeq; // deux puces touchées vite : la réponse la plus ancienne est ignorée
     let list;
     try {
       list = await PP.call("list_accounts", S.profileId ?? null);
     } catch (e) {
       return; // erreur déjà signalée par PP.call
     }
-    if (!live(token)) return;
+    if (!live(token) || mine !== loadSeq) return;
     accounts = list;
     renderList();
   }
@@ -135,16 +137,19 @@
     root = null;
   };
 
+  const sheetOpen = () => !!root && !root.querySelector("#acc-sheet").hidden;
+
+  // Raccourcis Ctrl+F / Ctrl+N (ui/app.js) : sans effet pendant la fiche ou le formulaire,
+  // pour ne pas perdre une saisie en cours.
   V.focusSearch = () => {
-    if (!root) return;
-    closeSheet();
+    if (!root || sheetOpen()) return;
     const q = root.querySelector("#acc-q");
     q.focus();
     q.select();
   };
 
   V.newItem = () => {
-    if (!root) return;
+    if (!root || sheetOpen()) return;
     openForm(null);
   };
 
