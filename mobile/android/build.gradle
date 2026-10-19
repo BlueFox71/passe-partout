@@ -1,0 +1,39 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// La plateforme installée s'appelle « android-37.0 » (API 37, révision mineure 0) : l'entier 37 de
+// variables.gradle se traduirait par « android-37 », introuvable. On impose donc la cible exacte à
+// l'appli et à tous les modules des greffons Capacitor.
+subprojects {
+    afterEvaluate { p ->
+        if (p.hasProperty('android')) {
+            p.android.compileSdkVersion(rootProject.ext.compileSdkPlatform)
+        }
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

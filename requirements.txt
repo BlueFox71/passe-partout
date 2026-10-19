@@ -4,3 +4,4 @@ openpyxl>=3.1
 Pillow>=10
 pytest>=8
 pyinstaller>=6
+segno>=1.6

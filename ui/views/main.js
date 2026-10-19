@@ -90,6 +90,7 @@
           <div class="topbar">
             <div class="search">${PP.icon.search}<input class="input" id="q" placeholder="Rechercher un compte, un identifiant, une catégorie…" value="${PP.esc(S.query)}"><kbd>Ctrl F</kbd></div>
             <div class="spacer"></div>
+            <button class="icon-btn" id="sync" title="Synchroniser le téléphone">${PP.icon.phone}</button>
             <button class="btn btn-ghost" id="export">${PP.icon.export} Exporter</button>
             <button class="btn btn-primary" id="new">${PP.icon.plus} Nouveau</button>
           </div>
@@ -116,6 +117,7 @@
       if (S.view !== "accounts") { S.view = "accounts"; renderLayout(); V.focusSearch(false); return; }
       renderList();
     });
+    app.querySelector("#sync").addEventListener("click", () => PP.views.sync.open());
     app.querySelector("#new").addEventListener("click", V.newItem);
     app.querySelector("#export").addEventListener("click", () =>
       PP.views.export.open(S.view === "accounts" ? V.visible() : accounts, giftcards)

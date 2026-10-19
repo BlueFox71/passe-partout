@@ -65,6 +65,15 @@
     { name: "vault-20261017-213012.json", date: "17/10/2026 21:30" },
   ];
 
+  let devices = [
+    { id: "d1", name: "Pixel de Jules", last_sync: "2026-10-18T21:42:10" },
+    { id: "d2", name: "Téléphone d'Alexis", last_sync: "2026-10-12T08:05:00" },
+  ];
+  let sync = null; // { t0 }
+  const FAKE_QR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29" shape-rendering="crispEdges"><rect width="29" height="29" fill="#fff"/>' +
+    [[2, 2], [20, 2], [2, 20]].map(([x, y]) => `<path d="M${x} ${y}h7v7h-7z" fill="#000"/><path d="M${x + 1} ${y + 1}h5v5h-5z" fill="#fff"/><path d="M${x + 2} ${y + 2}h3v3h-3z" fill="#000"/>`).join("") +
+    Array.from({ length: 90 }, (_, i) => `<rect x="${10 + (i * 7) % 17}" y="${3 + (i * 11) % 24}" width="1" height="1" fill="#000"/>`).join("") + "</svg>";
+
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const need = () => { if (locked) throw new Error("Coffre verrouillé"); };
   const inProfile = (pid) => (x) => pid == null || x.profiles.includes(pid);
@@ -189,6 +198,19 @@
     async get_settings() { return clone(settings); },
     async save_settings(s) { settings = { ...settings, ...s }; return clone(settings); },
     async open_backups_folder() { return {}; },
+    async sync_start() { need(); sync = { t0: Date.now() }; return { qr: FAKE_QR, seconds: 120, hosts: ["192.168.1.20"] }; },
+    async sync_status() {
+      if (!sync) return { state: "closed", seconds_left: 0, device: null, summary: null, error: null };
+      const dt = (Date.now() - sync.t0) / 1000;
+      const left = Math.max(0, Math.round(120 - dt));
+      if (dt < 1.5) return { state: "waiting", seconds_left: left, device: null, summary: null, error: null };
+      if (dt < 4) return { state: "syncing", seconds_left: left, device: "Pixel de Jules", summary: null, error: dt < 2.5 ? "Code incorrect, réessaie sur le téléphone." : null };
+      if (!devices.some((d) => d.id === "d1")) devices.unshift({ id: "d1", name: "Pixel de Jules", last_sync: now().slice(0, 19) });
+      return { state: "done", seconds_left: left, device: "Pixel de Jules", summary: { to_pc: 3, to_phone: 5, deleted: 1, conflicts: 1 }, error: null };
+    },
+    async sync_stop() { sync = null; return {}; },
+    async list_devices() { return clone(devices); },
+    async forget_device(id) { devices = devices.filter((d) => d.id !== id); return {}; },
     async replace_images(accs, cards) {
       let n = 0;
       for (const [list, map] of [[accounts, accs || {}], [giftcards, cards || {}]])

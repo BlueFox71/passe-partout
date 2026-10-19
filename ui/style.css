@@ -391,3 +391,16 @@ select.input option { background: #1a0b2e; }
 .lock-ok svg { width: 96px; height: 96px; color: var(--ok); stroke-width: 3; filter: drop-shadow(0 0 18px var(--ok)); transform: scale(.4); transition: transform .3s cubic-bezier(.3, 1.6, .5, 1); }
 .lock-card.unlocked .lock-ok { opacity: 1; }
 .lock-card.unlocked .lock-ok svg { transform: scale(1); }
+
+/* synchronisation téléphone */
+.sync-body { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.sync-qr { background: #fff; padding: 14px; border-radius: 16px; line-height: 0; transition: opacity .2s; }
+.sync-qr svg { width: 220px; height: 220px; display: block; }
+.sync-qr.off { opacity: .25; }
+.sync-help { margin: 4px 0 0; color: var(--muted); }
+.sync-count { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; min-height: 28px; }
+.sync-state { font-weight: 600; }
+.sync-state.busy { color: var(--cyan); }
+.sync-state.ok { color: var(--ok); }
+.sync-state.bad { color: #ff9db0; }
+.sync-err { color: #ff9db0; font-size: 13px; min-height: 16px; }

@@ -1,0 +1,21 @@
+{
+  "name": "passe-partout-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "assemble": "node scripts/assemble.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/device": "8.0.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/preferences": "8.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3"
+  }
+}

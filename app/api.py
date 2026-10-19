@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -23,8 +25,10 @@ from app.exporter import export_png, export_text
 from app.images import normalize_image as _normalize_image
 from app.importer import import_xlsx
 from app.lockout import Lockout
-from app.model import Account, GiftCard, Profile, Vault, new_id, now_iso
+from app.model import Account, GiftCard, Profile, Vault, new_id, now_iso, tombstone
 from app.store import VaultCorrupt, VaultStore
+from app.sync import SYNC_SECONDS, SyncServer, SyncSession, b64u, private_ipv4s, qr_svg
+from app.syncflow import SyncFlow
 from app.textutil import normalize
 
 CLIPBOARD_SECONDS = 30
@@ -56,9 +60,21 @@ def _timer(seconds, fn):
     t.start()
 
 
+class _SyncRun:
+    """Une synchro en cours (QR affiché) : session à usage unique, serveur, dialogue, dernière erreur."""
+
+    def __init__(self, flow: SyncFlow, deadline: float):
+        self.flow = flow
+        self.deadline = deadline
+        self.session: SyncSession | None = None
+        self.server = None
+        self.error: str | None = None
+
+
 class Api:
     def __init__(self, store: VaultStore, clipboard, clock=time.monotonic, dialogs=None,
-                 schedule=_timer, today=date.today, wall_clock=time.time):
+                 schedule=_timer, today=date.today, wall_clock=time.time,
+                 sync_server=SyncServer, sync_hosts=private_ipv4s):
         self._store = store
         self._clip = clipboard
         self._clock = clock
@@ -67,6 +83,9 @@ class Api:
         self._today = today
         self._mutex = threading.RLock()
         self._pending = None  # (texte copié, échéance)
+        self._sync_server = sync_server
+        self._sync_hosts = sync_hosts
+        self._sync: _SyncRun | None = None
         self._config_path = store.path.parent / "config.json"
         self._config = self._read_config()
         # le délai anti-essais survit à un redémarrage (horloge murale, état dans config.json)
@@ -160,16 +179,24 @@ class Api:
         except OSError:
             pass
 
-    @_locked
     def lock(self) -> dict:
-        if self._lock_mode() == "none":
-            return {}
-        self._clear_pending_secret()
-        self._store.forget_key()
+        with self._mutex:
+            run = self._detach_sync()
+            if self._lock_mode() != "none":
+                self._clear_pending_secret()
+                self._store.forget_key()
+        self._stop_sync(run)  # hors du mutex : voir _stop_sync
         return {}
 
-    @_locked
     def set_lock(self, mode: str, code: str | None) -> dict:
+        with self._mutex:
+            self._set_lock(mode, code)
+            # une synchro ouverte a été préparée avec l'ancien code : on l'arrête, comme lock()
+            run = self._detach_sync()
+        self._stop_sync(run)  # hors du mutex : voir _stop_sync
+        return {}
+
+    def _set_lock(self, mode: str, code: str | None) -> None:
         self._vault()
         if mode not in ("none", "pin", "password"):
             raise ValueError("Mode de verrou inconnu")
@@ -184,7 +211,6 @@ class Api:
         else:
             self._config.pop("pin_length", None)
         self._write_config()
-        return {}
 
     @_locked
     def get_settings(self) -> dict:
@@ -212,11 +238,22 @@ class Api:
             out.append({"name": p.name, "date": d})
         return out
 
-    @_locked
     def restore_backup(self, name: str) -> dict:
+        with self._mutex:
+            self._restore_backup(name)
+            # le coffre a été remplacé sous une synchro ouverte : on l'arrête, comme lock()
+            run = self._detach_sync()
+        self._stop_sync(run)  # hors du mutex : voir _stop_sync
+        return {}
+
+    def _restore_backup(self, name: str) -> None:
         if "/" in name or "\\" in name:
             raise ValueError("Sauvegarde introuvable")
         self._store.restore(self._store.backup_dir / name)
+        # nouvelle génération (jeton aléatoire) : chaque téléphone saura que le coffre a été remplacé
+        # (et non modifié) et devra redonner le code du PC
+        self._config["generation"] = new_id()
+        self._write_config()
         self._corrupt = False
         try:
             self._store.reload()
@@ -224,7 +261,6 @@ class Api:
             self._store.forget_key()  # sauvegarde d'un autre code : il faudra le saisir
         except VaultCorrupt:
             self._corrupt = True
-        return {}
 
     # ---------------------------------------------------------------- comptes
     @_locked
@@ -276,6 +312,7 @@ class Api:
     def delete_account(self, account_id: str) -> dict:
         v = self._vault()
         v.accounts = [a for a in v.accounts if a.id != account_id]
+        v.deleted.append(tombstone("account", account_id, now_iso()))
         self._save()
         return {}
 
@@ -337,6 +374,7 @@ class Api:
             image=data.get("image") or None,
             profiles=self._check_profiles(data.get("profiles")),
             history=existing.history if existing else [],
+            updated=now_iso(),
         )
         if existing:
             v.giftcards[v.giftcards.index(existing)] = card
@@ -349,6 +387,7 @@ class Api:
     def delete_giftcard(self, card_id: str) -> dict:
         v = self._vault()
         v.giftcards = [g for g in v.giftcards if g.id != card_id]
+        v.deleted.append(tombstone("giftcard", card_id, now_iso()))
         self._save()
         return {}
 
@@ -374,7 +413,8 @@ class Api:
         prof = Profile(id=existing.id if existing else new_id(), name=name,
                        avatar=data.get("avatar") or None,
                        color=data.get("color") if COLOR_RE.match(str(data.get("color") or ""))
-                       else PALETTE[len(v.profiles) % len(PALETTE)])
+                       else PALETTE[len(v.profiles) % len(PALETTE)],
+                       updated=now_iso())
         if existing:
             v.profiles[v.profiles.index(existing)] = prof
         else:
@@ -392,7 +432,9 @@ class Api:
         for item in [*v.accounts, *v.giftcards]:
             if profile_id in item.profiles:
                 item.profiles = [p for p in item.profiles if p != profile_id] or [reassign_to]
+                item.updated = now_iso()
         v.profiles = [p for p in v.profiles if p.id != profile_id]
+        v.deleted.append(tombstone("profile", profile_id, now_iso()))
         self._save()
         return {}
 
@@ -506,6 +548,7 @@ class Api:
                 img = wanted.get(item.id)
                 if img and not item.image and str(img).startswith("data:image/png;base64,"):
                     item.image = img
+                    item.updated = now_iso()
                     n += 1
         if n:
             self._save()
@@ -525,6 +568,7 @@ class Api:
                 if (pair and len(pair) == 2 and item.image and item.image == pair[0]
                         and str(pair[1]).startswith("data:image/png;base64,")):
                     item.image = pair[1]
+                    item.updated = now_iso()
                     n += 1
         if n:
             self._save()
@@ -540,6 +584,125 @@ class Api:
     def open_backups_folder(self) -> dict:
         self._store.backup_dir.mkdir(parents=True, exist_ok=True)
         _open_folder(str(self._store.backup_dir))
+        return {}
+
+    # ---------------------------------------------------------------- synchro téléphone
+    def _detach_sync(self) -> _SyncRun | None:
+        """Retire la synchro en cours (à appeler sous le mutex) ; l'arrêter ensuite avec _stop_sync."""
+        run, self._sync = self._sync, None
+        return run
+
+    @staticmethod
+    def _stop_sync(run: _SyncRun | None) -> None:
+        """Ferme la session et arrête le serveur. Ne jamais l'appeler en tenant le mutex : un message en
+        cours tient le verrou de session et attend le mutex (close() n'attend pas, mais stop() peut
+        attendre la boucle du serveur)."""
+        if run is None:
+            return
+        if run.session is not None:
+            run.session.close()
+        server, run.server = run.server, None
+        if server is not None:
+            server.stop()
+
+    def _sync_generation(self) -> str:
+        """Jeton de génération du coffre (à appeler sous le mutex) : créé et enregistré s'il manque ou n'est
+        pas une chaîne (config perdue, ancien compteur entier)."""
+        g = self._config.get("generation")
+        if not isinstance(g, str) or not g:
+            g = self._config["generation"] = new_id()
+            try:
+                self._write_config()
+            except OSError:
+                pass  # jeton gardé en mémoire : au pire, nouveau jeton au prochain lancement (code redemandé)
+        return g
+
+    def _on_sync_message(self, run: _SyncRun, msg: dict) -> dict:
+        # appelé depuis un thread du serveur HTTP : même mutex que l'interface
+        with self._mutex:
+            if self._sync is not run:
+                return {"ok": False, "error": "closed", "message": "Synchronisation arrêtée sur le PC."}
+            try:
+                reply = run.flow.handle(msg)
+            except Exception:
+                run.error = "Erreur inattendue pendant la synchronisation."
+                raise
+            if reply.get("ok") is False:
+                run.error = reply.get("message")
+            elif msg.get("type") == "sync":
+                run.error = None
+            return reply
+
+    def _sync_timeout(self, run: _SyncRun) -> None:
+        with self._mutex:
+            if self._sync is not run:
+                return
+            server, run.server = run.server, None  # la synchro reste lisible : « expirée »
+        run.session.close()
+        if server is not None:
+            server.stop()
+
+    def sync_start(self) -> dict:
+        with self._mutex:
+            if self._lock_mode() == "none":
+                raise ValueError("Définis d'abord un code de verrouillage (Réglages) pour synchroniser un téléphone.")
+            self._vault()
+            self._sync_generation()
+            hosts = list(self._sync_hosts())
+            if not hosts:
+                raise ValueError("Aucun réseau local détecté : connecte le PC au Wi-Fi ou au câble de la box.")
+            old = self._detach_sync()
+        self._stop_sync(old)
+
+        pc_name = os.environ.get("COMPUTERNAME") or socket.gethostname()
+        key = os.urandom(32)
+        flow = SyncFlow(self._store, self._lockout, self._persist_lockout, lambda: self._config, pc_name,
+                        qr_key=key)
+        run = _SyncRun(flow, self._clock() + SYNC_SECONDS)
+        run.session = SyncSession(key, lambda msg: self._on_sync_message(run, msg), run.deadline, self._clock)
+        run.server = self._sync_server(run.session)
+        run.server.start()
+        with self._mutex:
+            old, self._sync = self._sync, run
+        self._stop_sync(old)
+        self._schedule(SYNC_SECONDS + 0.2, lambda: self._sync_timeout(run))
+        qr = qr_svg({"v": 1, "hosts": hosts, "port": run.server.port, "key": b64u(key), "pc": pc_name})
+        return {"qr": qr, "seconds": SYNC_SECONDS, "hosts": hosts}
+
+    def sync_status(self) -> dict:
+        with self._mutex:
+            run = self._sync
+            if run is None:
+                return {"state": "closed", "seconds_left": 0, "device": None, "summary": None, "error": None}
+            state = run.session.status  # lu sans le verrou de session
+            left = max(0, math.ceil(run.deadline - self._clock())) if state in ("waiting", "syncing") else 0
+            out = {"state": state, "seconds_left": left, "device": run.flow.device_name,
+                   "summary": run.flow.summary, "error": run.error}
+            server = None
+            if state not in ("waiting", "syncing"):
+                server, run.server = run.server, None  # usage unique : plus rien à servir
+        if server is not None:
+            server.stop()
+        return out
+
+    def sync_stop(self) -> dict:
+        with self._mutex:
+            run = self._detach_sync()
+        self._stop_sync(run)
+        return {}
+
+    @_locked
+    def list_devices(self) -> list[dict]:
+        devices = self._vault().sync.get("devices", {})
+        out = [{"id": k, "name": d.get("name"), "last_sync": d.get("last_sync")} for k, d in devices.items()]
+        out.sort(key=lambda d: d["last_sync"] or "", reverse=True)
+        return out
+
+    @_locked
+    def forget_device(self, device_id: str) -> dict:
+        devices = self._vault().sync.setdefault("devices", {})
+        if devices.pop(device_id, None) is not None:
+            self._save()
         return {}
 
     # ---------------------------------------------------------------- export

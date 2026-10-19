@@ -2,80 +2,9 @@ import json
 
 import pytest
 
-from app.api import Api
 from app.store import VaultStore
-from tests.conftest import sample_vault
+from tests.conftest import Clock, FakeClip, FakeDialogs, make_api, sample_vault  # noqa: F401 (réexportés)
 from tests.fixtures.make_xlsx import make_xlsx
-
-
-class FakeClip:
-    def __init__(self):
-        self.text = ""
-
-    def get(self):
-        return self.text
-
-    def set(self, text, secret=False):
-        self.text = text
-
-    def clear(self):
-        self.text = ""
-
-
-class Clock:
-    def __init__(self):
-        self.t = 0.0
-
-    def __call__(self):
-        return self.t
-
-    def advance(self, s):
-        self.t += s
-
-
-class FakeDialogs:
-    def __init__(self):
-        self.file = None
-        self.folder = None
-
-    def open_file(self, kind):
-        return self.file
-
-    def pick_folder(self):
-        return self.folder
-
-
-@pytest.fixture
-def clock():
-    return Clock()
-
-
-@pytest.fixture
-def fake_clip():
-    return FakeClip()
-
-
-@pytest.fixture
-def dialogs():
-    return FakeDialogs()
-
-
-def make_api(tmp_path, clip, clock, dialogs):
-    return Api(VaultStore(tmp_path / "vault.json"), clip, clock=clock, wall_clock=clock, dialogs=dialogs, schedule=lambda s, f: None)
-
-
-@pytest.fixture
-def api_unlocked(tmp_path, fake_clip, clock, dialogs):
-    VaultStore(tmp_path / "vault.json").save(sample_vault())
-    return make_api(tmp_path, fake_clip, clock, dialogs)
-
-
-@pytest.fixture
-def api_locked(tmp_path, fake_clip, clock, dialogs):
-    api = make_api(tmp_path, fake_clip, clock, dialogs)
-    api.start_empty("Jules")
-    api.set_lock("pin", "123456")
-    return make_api(tmp_path, fake_clip, clock, dialogs)  # nouveau lancement
 
 
 def acc_dict(**kw):

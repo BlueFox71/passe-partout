@@ -1,6 +1,7 @@
 """Modèle de données : profils, comptes, cartes cadeaux et coffre complet."""
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
@@ -28,6 +29,7 @@ class Profile:
     name: str
     avatar: str | None = None
     color: str | None = None
+    updated: str = field(default_factory=now_iso)
 
 
 @dataclass
@@ -57,7 +59,13 @@ class GiftCard:
     end_date: str | None = None  # "AAAA-MM-JJ"
     image: str | None = None
     profiles: list[str] = field(default_factory=list)
-    history: list[dict] = field(default_factory=list)  # [{"date": "AAAA-MM-JJ", "amount": 12.5}]
+    history: list[dict] = field(default_factory=list)  # [{"id": "...", "date": "AAAA-MM-JJ", "amount": 12.5}]
+    updated: str = field(default_factory=now_iso)
+
+
+def tombstone(kind: str, item_id: str, at: str) -> dict:
+    """Pierre tombale : trace d'une suppression, pour que la synchro la propage au téléphone."""
+    return {"kind": kind, "id": item_id, "at": at}
 
 
 @dataclass
@@ -66,6 +74,8 @@ class Vault:
     accounts: list[Account] = field(default_factory=list)
     giftcards: list[GiftCard] = field(default_factory=list)
     settings: dict = field(default_factory=lambda: dict(DEFAULT_SETTINGS))
+    deleted: list[dict] = field(default_factory=list)  # pierres tombales
+    sync: dict = field(default_factory=lambda: {"devices": {}})
 
     def to_dict(self) -> dict:
         return {
@@ -74,13 +84,21 @@ class Vault:
             "accounts": [asdict(a) for a in self.accounts],
             "giftcards": [asdict(g) for g in self.giftcards],
             "settings": dict(self.settings),
+            "deleted": [dict(t) for t in self.deleted],
+            "sync": json.loads(json.dumps(self.sync)),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Vault":
+        giftcards = [_from_dict(GiftCard, g) for g in d.get("giftcards", [])]
+        for g in giftcards:
+            # id déterministe pour les anciennes entrées : identique sur PC et téléphone (même source)
+            g.history = [e if e.get("id") else {**e, "id": f"legacy-{i}"} for i, e in enumerate(g.history)]
         return cls(
             profiles=[_from_dict(Profile, p) for p in d.get("profiles", [])],
             accounts=[_from_dict(Account, a) for a in d.get("accounts", [])],
-            giftcards=[_from_dict(GiftCard, g) for g in d.get("giftcards", [])],
+            giftcards=giftcards,
             settings={**DEFAULT_SETTINGS, **d.get("settings", {})},
+            deleted=[dict(t) for t in d.get("deleted", [])],
+            sync={"devices": {}, **json.loads(json.dumps(d.get("sync") or {}))},
         )

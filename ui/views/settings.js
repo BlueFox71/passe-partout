@@ -7,6 +7,7 @@
     const backups = await PP.call("list_backups");
     const modeLabel = { none: "Aucun", pin: "Code PIN", password: "Mot de passe", unknown: "Code" };
     const missing = await missingLogos();
+    const devices = await PP.call("list_devices");
     container.innerHTML = `
       <div class="settings">
         <h2>Réglages</h2>
@@ -57,6 +58,8 @@
           <button class="btn btn-ghost" id="imp">Choisir un fichier…</button>
         </div>
 
+        ${PP.views.sync.card(devices)}
+
         <div class="card glass">
           <h3>🛟 Sauvegardes automatiques</h3>
           <p>Les 5 dernières versions sont conservées à chaque enregistrement${S.lock_mode !== "none" ? ", chiffrées comme le reste" : ""}.
@@ -94,6 +97,7 @@
       PP.toast(`${n} logo${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}`);
       await PP.views.main.afterChange();
     });
+    PP.views.sync.bindCard(container, devices, () => V.render(container));
     container.querySelectorAll("[data-b]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await PP.confirm("Restaurer cette sauvegarde ?", "Les modifications faites après cette date seront perdues (l'état actuel est lui-même sauvegardé avant).", { ok: "Restaurer" }))) return;
       await PP.call("restore_backup", b.dataset.b);

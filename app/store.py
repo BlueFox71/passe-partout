@@ -1,6 +1,8 @@
 """Stockage du coffre : fichier JSON (clair ou chiffré), écriture atomique, sauvegardes tournantes."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -177,6 +179,18 @@ class VaultStore:
             tmp = b.with_name(b.name + ".tmp")
             tmp.write_bytes(out)
             os.replace(tmp, b)
+
+    def verify_code(self, code: str) -> bool:
+        """Vrai si `code` est le code du coffre ouvert (dérivation avec son sel, comparaison de clé)."""
+        if self._key is None or self._salt is None or self._n is None or not isinstance(code, str):
+            return False
+        return hmac.compare_digest(crypto.derive_key(code, self._salt, self._n), self._key)
+
+    def code_version(self) -> str:
+        """« Version du code » : change avec le sel (donc à chaque changement de code), ne révèle pas le code."""
+        if self._salt is None:
+            raise PermissionError("Coffre verrouillé")
+        return hashlib.sha256(b"pp-code-version" + self._salt).hexdigest()[:16]
 
     def forget_key(self) -> None:
         """Efface la clé et les données déchiffrées de la mémoire (verrouillage)."""
