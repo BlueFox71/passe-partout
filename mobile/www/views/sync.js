@@ -44,10 +44,11 @@
   }
 
   // Affiche un écran ; renvoie {el, live} où live() est faux dès qu'un autre écran l'a remplacé.
-  function paint(inner) {
+  // `before` : contenu placé au-dessus de la carte (illustration de l'écran de départ).
+  function paint(inner, before = "") {
     stop();
     const token = seq;
-    const html = `<div class="m-card glass m-sync-card">${inner}</div>`;
+    const html = `${before}<div class="m-card glass m-sync-card">${inner}</div>`;
     let el;
     if (container) {
       container.innerHTML = `<div class="m-sync"><div class="m-head"><h1>Synchro</h1></div>
@@ -83,15 +84,66 @@
   };
 
   // ------------------------------------------------------------ écran de départ
+  // Illustration néon : téléphone ⇄ PC reliés par deux flux de points (aller en haut, retour en bas).
+  // Animations CSS seulement (mobile.css), figées si l'appareil demande moins de mouvement.
+  const HERO = `<svg class="m-sync-hero" viewBox="0 0 340 170" role="img" aria-label="Téléphone et PC reliés">
+    <defs>
+      <linearGradient id="sy-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#7c3aed"/>
+      </linearGradient>
+      <linearGradient id="sy-link" x1="96" y1="0" x2="214" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#ff3d9a"/><stop offset=".5" stop-color="#00e5ff"/><stop offset="1" stop-color="#7c3aed"/>
+      </linearGradient>
+      <filter id="sy-glow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="3.5" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g class="sy-link">
+      <path class="sy-halo" d="M98 72 C135 40 175 40 212 66"/>
+      <path class="sy-halo" d="M212 102 C175 128 135 128 98 98"/>
+      <path class="sy-rail" d="M98 72 C135 40 175 40 212 66"/>
+      <path class="sy-rail" d="M212 102 C175 128 135 128 98 98"/>
+      <path class="sy-flow sy-out" d="M98 72 C135 40 175 40 212 66"/>
+      <path class="sy-flow sy-in" d="M212 102 C175 128 135 128 98 98"/>
+    </g>
+    <g filter="url(#sy-glow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <!-- téléphone : cadre de visée cyan et ligne de scan rose, comme l'écran de scan -->
+      <rect x="40" y="30" width="54" height="104" rx="11" stroke="url(#sy-grad)" stroke-width="3.5"/>
+      <path d="M61 39h12" stroke="url(#sy-grad)" stroke-width="2.5"/>
+      <path d="M54 66v-6h6M80 60h6v6M86 98v6h-6M60 104h-6v-6" stroke="#00e5ff" stroke-width="2.5"/>
+      <path class="sy-scan" d="M55 82h30" stroke="#ff3d9a" stroke-width="2.5"/>
+      <!-- PC portable : le QR code affiché à l'écran -->
+      <rect x="216" y="38" width="96" height="66" rx="7" stroke="url(#sy-grad)" stroke-width="3.5"/>
+      <path d="M202 116h124l-8 12H210z" stroke="url(#sy-grad)" stroke-width="3.5"/>
+      <g stroke="#00e5ff" stroke-width="2.5">
+        <rect x="245" y="50" width="12" height="12" rx="2"/><rect x="271" y="50" width="12" height="12" rx="2"/>
+        <rect x="245" y="78" width="12" height="12" rx="2"/>
+        <path d="M271 78h5M281 78v5M271 86v4h5M281 90h2"/>
+      </g>
+    </g>
+  </svg>`;
+  const ICON_PC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+  const ICON_QR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><rect x="7" y="7" width="4" height="4" rx=".5"/><rect x="13" y="13" width="4" height="4" rx=".5"/><path d="M13 7h4v3M7 14v3h3"/></svg>';
+  // Étapes : le bouton du PC porte la même icône téléphone (PP.icon.phone, lue à l'affichage).
+  const steps = () => [
+    [ICON_PC, "Sur le PC, ouvre <b>Passe-Partout</b>"],
+    [PP.icon.phone, "Clique sur le <b>bouton téléphone</b> en haut"],
+    [ICON_QR, "Scanne le <b>QR code</b> avec ce téléphone"],
+  ];
+
   function startScreen(error = "", note = "") {
     const { el, live } = paint(`
       <h2>Synchroniser avec le PC</h2>
-      <p>Sur le PC : Passe-Partout → « Synchroniser le téléphone », puis vise le QR code.</p>
+      <ol class="m-steps">${steps().map(([ic, txt], i) => `
+        <li><span class="m-step-ic" aria-hidden="true">${ic}<b>${i + 1}</b></span><span>${txt}</span></li>`).join("")}
+      </ol>
+      <div class="m-wifi">📶 Le téléphone et le PC doivent être sur le même&nbsp;Wi&#8209;Fi</div>
       <div class="hint" id="last"></div>
       ${error ? `<div class="warn-box" id="err">${esc(error)}</div>` : ""}
       ${note ? `<div class="hint" id="note">${esc(note)}</div>` : ""}
       <button type="button" class="btn btn-primary m-wide" id="scan">${PP.icon.sync}Scanner le QR code du PC</button>
-      ${container ? "" : `<button type="button" class="m-link" id="back">Retour</button>`}`);
+      ${container ? "" : `<button type="button" class="m-link" id="back">Retour</button>`}`, HERO);
     el.querySelector("#scan").addEventListener("click", () => scan());
     const back = el.querySelector("#back");
     if (back) back.addEventListener("click", () => PP.route());
