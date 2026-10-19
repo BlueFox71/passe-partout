@@ -342,7 +342,9 @@
         btn.disabled = false;
         err.textContent = e && e.code === "INSTALL_PERMISSION"
           ? "Autorise Passe-Partout à installer des applis, puis appuie à nouveau sur « Mettre à jour »."
-          : "L'installation n'a pas pu démarrer : réessaie.";
+          : e && e.code === "INVALID_APK"
+            ? "Mise à jour invalide : elle ne vient pas de Passe-Partout."
+            : "L'installation n'a pas pu démarrer : réessaie.";
         return;
       }
       if (!live()) return;

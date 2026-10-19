@@ -6,8 +6,9 @@
 // préférences et clés (simule un redémarrage de l'appli). Sans `store` : localStorage s'il existe,
 // sinon PPM.nativeFake.memoryStore() (mémoire). PPM.nativeFake est lui-même une instance par défaut.
 // Commandes de test : setBiometricError(code|null), setUnwrapError(code|null), setBiometricAvailable(bool),
-// setNextQr(texte), firePause(), fireResume(), fireBack(), setInstallError(code|null) ; `clipboard` = dernière
-// copie {text, sensitive, seconds} ; `installed` = APK passés à installApk (copies des octets).
+// setNextQr(texte), firePause(), fireResume(), fireBack(), setInstallError(code|null :
+// INSTALL_PERMISSION, INVALID_APK, FAILED) ; `clipboard` = dernière copie {text, sensitive, seconds} ;
+// `installed` = APK passés à installApk (copies des octets).
 // inNativeScreen() : vrai pendant un écran natif lancé par l'appli (scanner, empreinte), comme le natif réel
 // (Ruling 23 : ces écrans ne comptent pas comme arrière-plan pour le verrouillage à 30 s).
 // Codes d'erreur de unwrap, comme le natif réel : KEY_MISSING (clé absente ou effacée), BAD_BLOB (blob mal
@@ -217,7 +218,8 @@
         return onScreen(async () => {
           await null; // l'installateur s'ouvre après l'appel
           if (installError) throw nativeError(installError, installError === "INSTALL_PERMISSION"
-            ? "Autorise Passe-Partout à installer des applis." : "Installation impossible.");
+            ? "Autorise Passe-Partout à installer des applis."
+            : installError === "INVALID_APK" ? "Mise à jour invalide." : "Installation impossible.");
           fake.installed.push(new Uint8Array(bytes));
         });
       },

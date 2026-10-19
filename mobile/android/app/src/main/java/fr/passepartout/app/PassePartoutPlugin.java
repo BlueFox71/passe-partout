@@ -6,6 +6,10 @@ import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -43,6 +47,8 @@ import java.io.OutputStream;
 import java.security.KeyStore;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
@@ -70,6 +76,7 @@ import javax.crypto.spec.GCMParameterSpec;
  *   CAMERA_DENIED   : appareil photo refusé (scanQr) ;
  *   INSTALL_PERMISSION : installation d'applis non autorisée pour Passe-Partout (installApk ; l'écran
  *                     d'autorisation d'Android a été ouvert, l'utilisateur doit réessayer).
+ *   INVALID_APK     : APK reçu refusé (installApk) : autre paquet, autre signature, ou version pas plus récente.
  * Rien n'est journalisé : ni données, ni clés, ni exceptions.
  */
 @CapacitorPlugin(
@@ -479,6 +486,10 @@ public class PassePartoutPlugin extends Plugin {
             try (OutputStream out = new FileOutputStream(file)) {
                 out.write(apk);
             }
+            if (!isGenuineUpdate(ctx, file)) { // Ruling 5 : pas de fausse appli via un faux PC
+                file.delete();
+                throw new NativeError("INVALID_APK", "Mise à jour invalide.");
+            }
             Uri uri = FileProvider.getUriForFile(ctx, ctx.getPackageName() + ".fileprovider", file);
             Intent install = new Intent(Intent.ACTION_VIEW);
             install.setDataAndType(uri, APK_MIME);
@@ -491,6 +502,40 @@ public class PassePartoutPlugin extends Plugin {
                 call.reject("Installation de la mise à jour impossible.", "FAILED");
             }
         }
+    }
+
+    // Vraie mise à jour de Passe-Partout (Ruling 5) : même paquet, mêmes certificats de signature que l'appli
+    // installée, versionCode strictement supérieur. Toute erreur de lecture → refus.
+    private static boolean isGenuineUpdate(Context ctx, File file) {
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            String own = ctx.getPackageName();
+            PackageInfo apk = pm.getPackageArchiveInfo(file.getAbsolutePath(),
+                PackageManager.GET_SIGNING_CERTIFICATES | PackageManager.GET_SIGNATURES);
+            if (apk == null || !own.equals(apk.packageName)) return false;
+            PackageInfo installed = pm.getPackageInfo(own, PackageManager.GET_SIGNING_CERTIFICATES);
+            Set<String> apkSigners = signers(apk);
+            Set<String> ownSigners = signers(installed);
+            if (apkSigners.isEmpty() || !apkSigners.equals(ownSigners)) return false;
+            return apk.getLongVersionCode() > installed.getLongVersionCode();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // Certificats de signature (octets, en base64 pour comparer des ensembles). L'APK lu hors installation peut,
+    // selon la version d'Android, n'avoir que l'ancien champ « signatures ».
+    @SuppressWarnings("deprecation")
+    private static Set<String> signers(PackageInfo info) {
+        Signature[] sigs = null;
+        SigningInfo si = info.signingInfo;
+        if (si != null) sigs = si.getApkContentsSigners();
+        if (sigs == null || sigs.length == 0) sigs = info.signatures;
+        Set<String> out = new HashSet<>();
+        if (sigs != null) {
+            for (Signature sig : sigs) out.add(Base64.encodeToString(sig.toByteArray(), Base64.NO_WRAP));
+        }
+        return out;
     }
 
     // Lancement sur le thread principal ; écran introuvable → FAILED.

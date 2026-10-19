@@ -246,12 +246,13 @@
     // ------------------------------------------------------------ mise à jour de l'appli
     // APK vérifié (octets) → cache de l'appli → installateur d'Android. Se termine au retour dans l'appli.
     // Error.code « INSTALL_PERMISSION » : l'écran d'autorisation d'Android a été montré, réessayer ensuite.
+    // Error.code « INVALID_APK » : APK refusé (autre paquet, autre signature, version pas plus récente) ; rien d'installé.
     async installApk(bytes) {
       const data = b64Large(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
       try {
         await onScreen(() => PassePartout.installApk({ data }));
       } catch (e) {
-        throw coded(e, ["INSTALL_PERMISSION", "FAILED"]);
+        throw coded(e, ["INSTALL_PERMISSION", "INVALID_APK", "FAILED"]);
       }
     },
 

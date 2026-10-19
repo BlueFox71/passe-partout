@@ -645,3 +645,12 @@ test("nativeFake : installApk enregistre les octets, écran natif pendant l'appe
   await native.installApk(bytes);
   assert.equal(native.installed.length, 2);
 });
+
+test("nativeFake : APK refusé (INVALID_APK, Ruling 5) : rien d'installé, écran refermé", async () => {
+  const native = nativeFake.create({ store: nativeFake.memoryStore() });
+  native.setInstallError("INVALID_APK");
+  await assert.rejects(native.installApk(new Uint8Array([80, 75, 3, 4])),
+    { code: "INVALID_APK", message: "Mise à jour invalide." });
+  assert.deepEqual(native.installed, []);
+  assert.equal(native.inNativeScreen(), false);
+});
