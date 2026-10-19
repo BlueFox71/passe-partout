@@ -260,7 +260,6 @@ Entrée : `id` `passe-partout`, `name` « Passe-Partout », `tagline` « Tes mot
 ### Task 9: Publication 1.0.0 et recette avec Jules
 
 - [ ] **Step 1:** Jules valide `RELEASE_NOTES.md` ; `powershell -File release.ps1` avec `GH_TOKEN` fourni par Jules → release `v1.0.0` avec `Passe-Partout-1.0.0.exe`.
-- [ ] **Step 2:** Le Grenier installe Passe-Partout ; il s'ouvre sur le coffre existant (`%APPDATA%\PassePartout`).
+- [ ] **Step 2:** avec l'accord de Jules, à ce moment-là : fermer l'ancienne copie et supprimer `dist\Passe-Partout\` + son raccourci (et l'épingle de la barre des tâches) AVANT le premier lancement de la 1.0.0 (Ruling 6 : la 1.0.0 refuse de démarrer tant que « Passe-Partout.exe » tourne) ; puis le Grenier installe Passe-Partout ; il s'ouvre sur le coffre existant (`%APPDATA%\PassePartout`).
 - [ ] **Step 3: Rattrapage du téléphone** : Réglages → « Installer l'appli sur le téléphone » → scan → installation par-dessus la 0.1.0 ; l'appli rouvre avec les mêmes données (code, empreinte, appairage) ; synchro normale.
 - [ ] **Step 4: Mise à jour par la synchro** : construire localement une 1.0.1 de test (non publiée, `VERSION` modifié sans commit), la lancer, synchroniser → le téléphone propose la mise à jour, l'installe, garde ses données ; remettre `VERSION` à 1.0.0.
-- [ ] **Step 5:** avec l'accord de Jules : supprimer `dist\Passe-Partout\` (ancienne copie) et l'ancien raccourci du bureau.
