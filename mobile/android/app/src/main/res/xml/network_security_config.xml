@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Trafic HTTP en clair autorisé : la synchronisation parle au petit serveur HTTP local du PC
+  (adresse IP du réseau domestique, sans certificat possible). Ce n'est pas une faiblesse :
+  les corps des requêtes et des réponses sont déjà chiffrés de bout en bout en AES-GCM
+  avec la clé issue de l'appairage ; rien de lisible ne circule en clair.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

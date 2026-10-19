@@ -1,4 +1,12 @@
-"""Génère ui/assets/icon.ico (clé blanche, contour néon rose→violet) — rendu Pillow de ui/assets/icon.svg."""
+"""Génère ui/assets/icon.ico (clé blanche, contour néon rose→violet) — rendu Pillow de ui/assets/icon.svg.
+
+Avec --android : écrit dans mobile/resources/ icon-foreground.png (clé seule, dans la zone sûre de 66 %),
+icon-background.png (#0b0716), icon-only.png (les deux superposés, icônes classiques) et splash.png
+(écran de lancement), entrées de `npx @capacitor/assets generate --android`.
+"""
+import os
+import sys
+
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 S = 1024  # travail en haute définition puis réduction
@@ -44,5 +52,43 @@ def main():
     base.resize((256, 256), Image.LANCZOS).save("ui/assets/icon.png")
 
 
+def key_with_halo():
+    """Clé blanche + halo rose sur fond transparent (S × S)."""
+    key = key_layer()
+    halo = key.filter(ImageFilter.GaussianBlur(1.2 * k)).point(lambda v: int(v * 0.7))
+    out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    out = Image.alpha_composite(out, Image.merge("RGBA", (*Image.new("RGB", (S, S), (0xFF, 0x8F, 0xCA)).split(), halo)))
+    return Image.alpha_composite(out, Image.merge("RGBA", (*Image.new("RGB", (S, S), (255, 255, 255)).split(), key)))
+
+
+BG_ANDROID = (0x0B, 0x07, 0x16, 255)
+
+
+def android(out_dir="mobile/resources"):
+    """Icône adaptative Android : premier plan 1024 px (clé centrée dans le disque sûr de 66 %) + fond uni."""
+    art = key_with_halo()
+    art = art.crop(art.getbbox())
+    # Boîte de la clé (halo compris) de 0,55 × S : point le plus éloigné du centre ≈ 0,30 × S < 0,33 × S (zone sûre).
+    side = int(S * 0.55)
+    scale = side / max(art.size)
+    art = art.resize((round(art.width * scale), round(art.height * scale)), Image.LANCZOS)
+    fg = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    fg.paste(art, ((S - art.width) // 2, (S - art.height) // 2), art)
+    os.makedirs(out_dir, exist_ok=True)
+    bg = Image.new("RGBA", (S, S), BG_ANDROID)
+    fg.save(os.path.join(out_dir, "icon-foreground.png"))
+    bg.convert("RGB").save(os.path.join(out_dir, "icon-background.png"))
+    Image.alpha_composite(bg, fg).convert("RGB").save(os.path.join(out_dir, "icon-only.png"))
+    # Écran de lancement 2732 px : fond uni, clé au centre (≈ 1/5 de la largeur, rognable sans risque).
+    W = 2732
+    splash = Image.new("RGBA", (W, W), BG_ANDROID)
+    small = fg.resize((W // 3, W // 3), Image.LANCZOS)
+    splash.alpha_composite(small, ((W - small.width) // 2, (W - small.height) // 2))
+    splash.convert("RGB").save(os.path.join(out_dir, "splash.png"))
+
+
 if __name__ == "__main__":
-    main()
+    if "--android" in sys.argv[1:]:
+        android()
+    else:
+        main()

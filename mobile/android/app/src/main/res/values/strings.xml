@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Passe-Partout</string>
+    <string name="title_activity_main">Passe-Partout</string>
+    <string name="package_name">fr.passepartout.app</string>
+    <string name="custom_url_scheme">fr.passepartout.app</string>
+</resources>

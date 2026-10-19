@@ -5,5 +5,18 @@
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
     "assemble": "node scripts/assemble.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/barcode-scanner": "3.1.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/device": "8.0.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/preferences": "8.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3"
   }
 }

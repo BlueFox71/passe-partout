@@ -1,1 +1,13 @@
 * text=auto eol=lf
+# Scripts Windows : fins de ligne CRLF obligatoires pour cmd.exe
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Binaires : jamais convertis
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.jar binary
+*.jks binary
+*.keystore binary
+*.apk binary
