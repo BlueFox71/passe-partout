@@ -218,6 +218,7 @@
     users: svg('<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/>'),
     back: svg('<path d="M15 18l-6-6 6-6"/>'),
     sync: svg('<path d="M7 20V4M3 8l4-4 4 4"/><path d="M17 4v16m-4-4 4 4 4-4"/>'),
+    phone: svg('<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>'),
     select: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>'),
   };
 

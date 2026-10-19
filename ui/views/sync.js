@@ -39,7 +39,7 @@
     stopPolling();
     const my = token;
     const m = PP.modal.open(`
-      <h2>${PP.icon.sync.replace("<svg", '<svg style="width:22px"')} Synchroniser le téléphone</h2>
+      <h2>${PP.icon.phone.replace("<svg", '<svg style="width:22px"')} Synchroniser le téléphone</h2>
       <div class="sync-body">
         <div class="sync-qr" id="sy-qr">${start.qr}</div>
         <p class="sync-help">Sur le téléphone : <b>Synchro → Scanner</b></p>
