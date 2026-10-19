@@ -59,7 +59,8 @@ import javax.crypto.spec.GCMParameterSpec;
  *   KEY_INVALIDATED : clé biométrique invalidée (empreinte ajoutée ou retirée) ;
  *   BAD_BLOB        : blob mal formé, ou qui ne correspond pas à la clé (étiquette GCM fausse) ;
  *   CANCELED        : fenêtre d'empreinte annulée (bouton « Utiliser le code », retour, appli en arrière-plan) ;
- *   FAILED          : tout le reste (erreur passagère du Keystore, trop d'essais d'empreinte…) ;
+ *   LOCKOUT         : trop d'essais d'empreinte (capteur bloqué par Android, temporairement ou non) ;
+ *   FAILED          : tout le reste (erreur passagère du Keystore…) ;
  *   CAMERA_DENIED   : appareil photo refusé (scanQr).
  * Rien n'est journalisé : ni données, ni clés, ni exceptions.
  */
@@ -316,7 +317,7 @@ public class PassePartoutPlugin extends Plugin {
                                 call.reject("Empreinte annulée.", "CANCELED");
                             } else if (code == BiometricPrompt.ERROR_LOCKOUT
                                 || code == BiometricPrompt.ERROR_LOCKOUT_PERMANENT) {
-                                call.reject("Trop d'essais d'empreinte : utilise le code.", "FAILED");
+                                call.reject("Trop d'essais d'empreinte : utilise le code.", "LOCKOUT");
                             } else {
                                 call.reject("Empreinte indisponible.", "FAILED");
                             }

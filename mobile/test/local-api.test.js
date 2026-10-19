@@ -402,6 +402,7 @@ test("fichiers incomplets ou illisibles au démarrage → corrompu ; aucun fichi
     const n = nativeFake.create({ store });
     if (keys !== null) await n.writeFileAtomic("keys.json", keys);
     if (vault !== null) await n.writeFileAtomic("vault.enc", vault);
+    await n.setPref("pp.meta", { device_id: "d", last_sync: T0 }); // déjà synchronisé une fois
     const api = new LocalApi({ native: n, clock: () => 0, iterations: ITER });
     const s = await api.get_state();
     assert.deepEqual([s.corrupt, s.locked, s.has_data], [true, false, false], `${keys} / ${vault}`);
@@ -495,4 +496,87 @@ test("nativeFake : bouton retour essayé du dernier rappel au premier", async ()
   n.onBack(() => { seen.push("b"); return false; });
   assert.equal(await n.fireBack(), true);
   assert.deepEqual(seen, ["b", "a"]);
+});
+
+// ---------------------------------------------------------------- revue finale mobile
+const PAIR = crypto_b64u(new Uint8Array(32).fill(9));
+function crypto_b64u(b) { return require("../www/js/crypto.js").b64u(b); }
+
+test("première synchro interrompue (aucune synchro réussie) → téléphone neuf, pas « corrompu »", async () => {
+  for (const [keys, vault] of [[null, '{"v":1,"iv":"x","ct":"y"}'], ["{}", null]]) {
+    const n = nativeFake.create({ store: nativeFake.memoryStore() });
+    if (keys !== null) await n.writeFileAtomic("keys.json", keys);
+    if (vault !== null) await n.writeFileAtomic("vault.enc", vault);
+    const api = new LocalApi({ native: n, clock: () => 0, iterations: ITER });
+    const s = await api.get_state();
+    assert.deepEqual([s.corrupt, s.locked, s.has_data], [false, false, false]);
+    await api.apply_sync(pcResp(), "1234");
+    const st = await api.get_state();
+    assert.equal(st.has_data, true);
+    assert.equal((await api.list_accounts(null)).length, 1);
+  }
+});
+
+test("appairage : secret reçu gardé chiffré dans vault.enc, jamais en préférences ni dans le coffre envoyé", async () => {
+  const { api, store, native } = setup();
+  assert.equal(await api.sync_pair(), null);
+  await api.apply_sync(pcResp({ pair: PAIR }), "1234");
+  assert.equal(await api.sync_pair(), PAIR);
+  const prefs = JSON.stringify(await native.getPref("pp.meta")) + JSON.stringify(await native.getPref("pp.settings"));
+  assert.ok(!prefs.includes(PAIR));
+  assert.ok(!(await native.readFile("vault.enc")).includes(PAIR));
+  assert.ok(!JSON.stringify(await api.sync_payload()).includes(PAIR));
+  assert.ok(!JSON.stringify(await api.sync_info()).includes(PAIR));
+  // synchro suivante sans nouveau secret : l'ancien est gardé ; relu après redémarrage
+  await api.apply_sync(pcResp({ synced_at: "2026-10-19T11:00:00" }));
+  const again = new LocalApi({ native: nativeFake.create({ store }), clock: () => 0, iterations: ITER });
+  assert.equal((await again.unlock("1234")).ok, true);
+  assert.equal(await again.sync_pair(), PAIR);
+  // « Ré-appairer » : secret oublié
+  assert.deepEqual(await again.forget_pair(), {});
+  assert.equal(await again.sync_pair(), null);
+  // secret mal formé refusé sans rien écrire
+  await assert.rejects(again.apply_sync(pcResp({ pair: "court" })), /invalide/);
+});
+
+test("Ruling 22 : coffre modifié pendant la synchro → apply_sync ne remplace rien, last_sync inchangé", async () => {
+  const { api, native } = await synced();
+  const before = (await api.sync_info()).last_sync;
+  await api.sync_payload();
+  await api.save_account({ name: "Ajout pendant la synchro", login: "x", password: "y", profiles: ["p1"] });
+  const r = await api.apply_sync(pcResp({ synced_at: "2026-10-19T11:00:00" }));
+  assert.deepEqual(r, { error: "modified" });
+  assert.equal((await api.sync_info()).last_sync, before);
+  assert.ok((await api.list_accounts(null)).some((a) => a.name === "Ajout pendant la synchro"));
+  assert.equal((await native.getPref("pp.meta")).last_sync, before);
+  // relance : sync_payload puis apply_sync sans modification → appliqué
+  await api.sync_payload();
+  assert.deepEqual(await api.apply_sync(pcResp({ synced_at: "2026-10-19T11:00:00" })), {});
+  assert.equal((await api.sync_info()).last_sync, "2026-10-19T11:00:00");
+});
+
+test("empreinte : trop d'essais (LOCKOUT) → « bio_lockout », empreinte gardée", async () => {
+  const { api, native } = await synced();
+  await api.save_settings({ biometric: true });
+  await api.lock();
+  native.setBiometricError("LOCKOUT");
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "bio_lockout" });
+  native.setBiometricError(null);
+  assert.equal((await api.get_state()).biometric, true);
+  assert.equal((await api.unlock_biometric()).ok, true);
+});
+
+test("nativeFake : écran natif (empreinte, scanner) signalé pendant l'appel (Ruling 23)", async () => {
+  const native = nativeFake.create({ store: nativeFake.memoryStore() });
+  assert.equal(native.inNativeScreen(), false);
+  const blob = await native.wrap("pp-bio", new Uint8Array([1, 2]), { biometric: true });
+  const p = native.unwrap("pp-bio", blob, { title: "x" });
+  assert.equal(native.inNativeScreen(), true);
+  await p;
+  assert.equal(native.inNativeScreen(), false);
+  native.setNextQr("qr");
+  const q = native.scanQr();
+  assert.equal(native.inNativeScreen(), true);
+  assert.equal(await q, "qr");
+  assert.equal(native.inNativeScreen(), false);
 });

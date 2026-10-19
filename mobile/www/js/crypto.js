@@ -10,6 +10,9 @@
   const AAD_VAULT = "pp-vault-v1";
   const AAD_WRAP = "pp-wrap-v1";
   const PBKDF2_ITERATIONS = 600000;
+  // Appairage (Ruling 21, comme app/syncflow.py) : HMAC-SHA256(secret, clé du QR ‖ étiquette)
+  const PROOF_PHONE = "pp-phone-hello";
+  const PROOF_PC = "pp-pc-hello";
 
   // Base64url sans remplissage "=", comme côté PC.
   function b64u(bytes) {
@@ -107,8 +110,26 @@
     }
   }
 
+  // Preuve d'appairage pour une session : base64url(HMAC-SHA256(pair, qrKey ‖ label)).
+  async function pairProof(pair, qrKey, label) {
+    const k = await subtle.importKey("raw", pair, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const tag = enc.encode(label);
+    const data = new Uint8Array(qrKey.length + tag.length);
+    data.set(qrKey, 0);
+    data.set(tag, qrKey.length);
+    return b64u(new Uint8Array(await subtle.sign("HMAC", k, data)));
+  }
+
+  // Comparaison de deux chaînes sans sortie anticipée.
+  function sameText(a, b) {
+    if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return diff === 0;
+  }
+
   const api = {
-    b64u, unb64u, randomBytes, AAD_REQ, AAD_RESP, seal, open,
+    b64u, unb64u, randomBytes, AAD_REQ, AAD_RESP, seal, open, PROOF_PHONE, PROOF_PC, pairProof, sameText,
     PBKDF2_ITERATIONS, wrapWithCode, unwrapWithCode, encryptVault, decryptVault,
   };
   root.PPM = root.PPM || {};

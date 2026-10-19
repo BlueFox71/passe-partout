@@ -1,7 +1,7 @@
 // Client de synchro du téléphone : lecture du QR code du PC, messages « hello » / « sync » / « cancel »
 // chiffrés avec la clé du QR (enveloppe de app/sync.py), essai des adresses du PC dans l'ordre.
-// Erreurs de transport : Error avec .code « unreachable », « expired », « forbidden » ou « invalid » et un
-// message à afficher tel quel. Une erreur du PC ({"ok": false, …}) est renvoyée comme réponse, sauf
+// Erreurs de transport : Error avec .code « unreachable », « expired », « forbidden », « invalid » ou
+// « unpaired » (PC qui ne prouve pas l'appairage, Ruling 21) et un message à afficher tel quel. Une erreur du PC ({"ok": false, …}) est renvoyée comme réponse, sauf
 // « closed » (PC verrouillé pendant l'échange) traitée comme un QR expiré. Rien n'est journalisé.
 (function (root) {
   const PPM = (root.PPM = root.PPM || {});
@@ -17,6 +17,8 @@
     expired: "QR code expiré : relance la synchronisation sur le PC.",
     forbidden: "QR code refusé par le PC.",
     invalid: "Réponse du PC incompréhensible : mets à jour Passe-Partout sur le PC et sur le téléphone.",
+    unpaired: "Ce QR code ne vient pas de ton PC (appairage non reconnu). Si tu as réinstallé ou oublié ce "
+      + "téléphone sur le PC, choisis « Ré-appairer » : le code du PC te sera demandé.",
   };
 
   function syncError(code, message = MESSAGES[code]) {
@@ -110,9 +112,19 @@
     }
 
     // Un seul hello par session : s'il a déjà réussi, sa réponse est renvoyée sans nouvel envoi.
-    async hello(info) {
+    // `pair` : secret d'appairage du téléphone (base64url) ou null ; jamais envoyé, seule la preuve part.
+    // Téléphone appairé : une réponse sans preuve valide du PC lève « unpaired » AVANT tout code ou coffre.
+    async hello(info, { pair = null } = {}) {
       if (this._hello) return this._hello;
+      const C = this._crypto;
       const msg = { type: "hello", ...info };
+      delete msg.pair;
+      delete msg.proof;
+      let secret = null;
+      if (typeof pair === "string" && pair) {
+        secret = C.unb64u(pair);
+        msg.proof = await C.pairProof(secret, this._qr.key, C.PROOF_PHONE);
+      }
       const rank = { unreachable: 0, invalid: 1, forbidden: 2, expired: 3 };
       let worst = null;
       for (const host of this._qr.hosts) {
@@ -128,6 +140,10 @@
         }
         if (reply.ok !== true && reply.ok !== false) throw syncError("invalid");
         this._host = host;
+        if (reply.ok === true && secret) {
+          const expected = await C.pairProof(secret, this._qr.key, C.PROOF_PC);
+          if (!C.sameText(reply.proof_pc, expected)) throw syncError("unpaired");
+        }
         if (reply.ok === true) this._hello = reply;
         return reply;
       }

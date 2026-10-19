@@ -5,7 +5,9 @@
 // Fichiers : @capacitor/filesystem (Directory.Data, privé à l'appli) ; préférences : @capacitor/preferences
 // (valeurs JSON) ; nom de l'appareil : @capacitor/device ; cycle de vie et bouton retour : @capacitor/app ;
 // requêtes vers le PC : CapacitorHttp (natif, donc sans blocage du contenu mixte http:// par la WebView).
-// Codes d'erreur de unwrap : KEY_MISSING | KEY_INVALIDATED | BAD_BLOB | CANCELED | FAILED.
+// Codes d'erreur de unwrap : KEY_MISSING | KEY_INVALIDATED | BAD_BLOB | CANCELED | LOCKOUT | FAILED.
+// inNativeScreen() : vrai pendant un écran natif lancé par l'appli (scanner et sa demande de permission,
+// invite d'empreinte) ; boot.js ne compte pas ce temps comme « arrière-plan » (Ruling 23).
 // Aucun secret n'est journalisé.
 (function (root) {
   const Cap = root.Capacitor;
@@ -52,7 +54,19 @@
     return nativeError(code, (e && e.message) || code);
   }
 
-  const UNWRAP_CODES = ["KEY_MISSING", "KEY_INVALIDATED", "BAD_BLOB", "CANCELED", "FAILED"];
+  const UNWRAP_CODES = ["KEY_MISSING", "KEY_INVALIDATED", "BAD_BLOB", "CANCELED", "LOCKOUT", "FAILED"];
+
+  // ---------------------------------------------------------------- écrans natifs (Ruling 23)
+  let screens = 0;
+  async function onScreen(fn) {
+    screens++;
+    try {
+      return await fn();
+    } finally {
+      screens--;
+    }
+  }
+
 
   // ---------------------------------------------------------------- fichiers
   function isMissing(e) {
@@ -87,19 +101,22 @@
       const opts = { alias: String(alias), data: b64(bytes), biometric: !!biometric };
       if (title) opts.title = String(title);
       try {
-        const r = await PassePartout.wrap(opts);
+        const call = () => PassePartout.wrap(opts);
+        const r = await (biometric ? onScreen(call) : call()); // invite d'empreinte
         return r.blob;
       } catch (e) {
         throw coded(e, UNWRAP_CODES);
       }
     },
 
+    // `title` n'est donné que pour la clé à empreinte : l'invite s'affiche alors.
     async unwrap(alias, blob, { title } = {}) {
       const opts = { alias: String(alias), blob: String(blob) };
       if (title) opts.title = String(title);
       let r;
       try {
-        r = await PassePartout.unwrap(opts);
+        const call = () => PassePartout.unwrap(opts);
+        r = await (title ? onScreen(call) : call());
       } catch (e) {
         throw coded(e, UNWRAP_CODES);
       }
@@ -182,6 +199,8 @@
       }
     },
 
+    inNativeScreen() { return screens > 0; },
+
     onPause(cb) { App.addListener("pause", () => cb()); },
     onResume(cb) { App.addListener("resume", () => cb()); },
 
@@ -207,7 +226,7 @@
     // Texte du QR, ou null si le scan est annulé ; Error.code « CAMERA_DENIED » si l'appareil photo est refusé.
     async scanQr() {
       try {
-        const r = await PassePartout.scanQr();
+        const r = await onScreen(() => PassePartout.scanQr()); // scanner et demande de permission
         return r && typeof r.text === "string" ? r.text : null;
       } catch (e) {
         throw coded(e, ["CAMERA_DENIED", "FAILED"]);

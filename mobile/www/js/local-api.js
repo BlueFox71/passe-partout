@@ -2,7 +2,8 @@
 // partagée (PP.call) fonctionne telle quelle. Toutes les méthodes sont asynchrones et exécutées une à une.
 //
 // Stockage (via le natif) :
-//   vault.enc  = encryptVault(clé de données, coffre)
+//   vault.enc  = encryptVault(clé de données, coffre) ; le coffre porte aussi `pair`, secret d'appairage
+//                donné par le PC (Ruling 21) : chiffré avec le coffre, jamais en préférences ni envoyé
 //   keys.json  = {"code": wrap("pp-device", JSON(wrapWithCode(clé, code))), "bio"?: wrap("pp-bio", clé, biométrique)}
 //   préférences pp.meta = {device_id, last_sync, generation, code_version, pc_name, lock_mode, pin_length},
 //   pp.settings = {autolock_minutes, biometric}, pp.lockout = état du délai anti-essais.
@@ -148,6 +149,15 @@
     }
   }
 
+  function isPair(p) {
+    if (typeof p !== "string" || !/^[A-Za-z0-9_-]+$/.test(p)) return false;
+    try {
+      return C.unb64u(p).length === PAIR_BYTES;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Formes de vault.enc et de l'enveloppe du code : illisibles = coffre corrompu (jamais « mauvais code »).
   const isBlob = (b) => isObj(b) && typeof b.iv === "string" && typeof b.ct === "string";
   const isWrapped = (w) => isObj(w) && typeof w.salt === "string" && typeof w.iv === "string"
@@ -156,6 +166,7 @@
   // Erreurs du Keystore (Error.code du natif) : seules une clé absente ou effacée (KEY_MISSING) et un blob
   // illisible (BAD_BLOB) sont définitives ; le reste (FAILED : erreur passagère d'Android…) se réessaie.
   const KEY_GONE = ["KEY_MISSING", "BAD_BLOB"];
+  const PAIR_BYTES = 32;
   const BIO_GONE = ["KEY_INVALIDATED", ...KEY_GONE];
   // Erreur passagère du Keystore : le code n'a pas été essayé (pas compté dans le délai anti-essais).
   const NATIVE_ERROR = { ok: false, wait_seconds: 0, error: "native" };
@@ -171,6 +182,10 @@
       this._dataKey = null; // présente seulement déverrouillé
       this._vault = null;
       this._corrupt = false; // coffre local illisible : le téléphone se présente comme neuf au PC
+      // Ruling 22 : révision du coffre, augmentée à chaque modification ; sync_payload la note et apply_sync
+      // ne remplace pas un coffre modifié depuis (la modification serait perdue)
+      this._rev = 0;
+      this._syncRev = null;
     }
 
     // ------------------------------------------------------------ interne
@@ -216,7 +231,9 @@
         this._hasData = true;
       } else {
         this._keys = null;
-        this._corrupt = true;
+        // première synchro interrompue (pp.meta, écrit en dernier, n'a jamais reçu de last_sync) : aucune
+        // donnée n'a jamais existé, le téléphone est neuf ; la prochaine synchro réécrit les deux fichiers
+        this._corrupt = !!this._meta.last_sync;
       }
     }
 
@@ -335,6 +352,7 @@
         const v = this._v();
         const d = this._date();
         const out = fn(v, d, this._meta.last_sync);
+        this._rev++;
         await this._saveVault();
         return out === undefined ? {} : clone(out);
       });
@@ -423,6 +441,8 @@
           dataKey = await this._native.unwrap(ALIAS_BIO, this._keys.bio, { title: "Déverrouiller Passe-Partout" });
         } catch (e) {
           if (e && e.code === "CANCELED") return { ok: false, error: "canceled" };
+          // trop d'essais d'empreinte (Android bloque le capteur) : l'empreinte reste activée, code à saisir
+          if (e && e.code === "LOCKOUT") return { ok: false, error: "bio_lockout" };
           // erreur passagère (trop d'essais, Keystore occupé…) : l'empreinte reste activée
           if (!(e && BIO_GONE.includes(e.code))) return { ok: false, error: "native" };
           // empreinte ajoutée ou retirée dans Android (KEY_INVALIDATED), clé effacée ou blob illisible : on désactive
@@ -566,9 +586,31 @@
       }));
     }
 
+    // Secret d'appairage (base64url) ou null (neuf, corrompu, d'avant l'appairage, « Ré-appairer »).
+    // Réservé au client de synchro, qui n'en envoie que la preuve (Ruling 21) ; jamais affiché.
+    sync_pair() {
+      return this._run(async () => {
+        if (!this._hasData) return null;
+        return strOrNull(this._v().pair);
+      });
+    }
+
+    // « Ré-appairer » : oublie le secret local ; la prochaine synchro exigera le code du PC.
+    forget_pair() {
+      return this._run(async () => {
+        if (this._hasData && this._v().pair) {
+          delete this._vault.pair;
+          await this._saveVault();
+        }
+        return {};
+      });
+    }
+
     // Coffre envoyé au PC (validé par validate_phone_vault) ; vide avant la première synchro.
+    // Note la révision du coffre : apply_sync refusera de remplacer un coffre modifié depuis (Ruling 22).
     sync_payload() {
       return this._run(async () => {
+        this._syncRev = this._rev;
         if (!this._hasData) return { profiles: [], accounts: [], giftcards: [], deleted: [] };
         const v = this._v();
         return clone({ profiles: v.profiles, accounts: v.accounts, giftcards: v.giftcards, deleted: v.deleted });
@@ -576,13 +618,19 @@
     }
 
     // Réponse de synchro réussie du PC ; `code` = code du PC saisi (obligatoire au premier lancement).
-    // Ordre d'écriture : vault.enc → keys.json → pp.meta.
+    // Ordre d'écriture : vault.enc → keys.json → pp.meta. Renvoie {} ; {error: "modified"} sans rien écrire
+    // si le coffre a été modifié depuis sync_payload (la synchro est à relancer, rien n'est perdu).
     apply_sync(resp, code = null) {
       return this._run(async () => {
         // tout est vérifié avant la moindre écriture
         if (!isObj(resp) || resp.ok !== true) invalid();
         const rv = resp.vault;
         validateVault(rv);
+        const pair = resp.pair == null ? null : resp.pair;
+        if (pair !== null && !isPair(pair)) invalid();
+        const sentRev = this._syncRev;
+        this._syncRev = null;
+        if (sentRev !== null && sentRev !== this._rev) return { error: "modified" };
         const hasCode = typeof code === "string" && code !== "";
         let dataKey = this._dataKey;
         let newKey = false;
@@ -595,12 +643,16 @@
         const vault = {
           version: 1, profiles: rv.profiles, accounts: rv.accounts, giftcards: rv.giftcards, deleted: rv.deleted,
         };
+        // nouveau secret après une synchro avec code ; sinon celui déjà gardé (même clé de données)
+        const keep = !newKey && this._vault && isPair(this._vault.pair) ? this._vault.pair : null;
+        if (pair || keep) vault.pair = pair || keep;
 
         // 1. coffre
         const blob = await C.encryptVault(dataKey, vault);
         await this._native.writeFileAtomic(VAULT_FILE, JSON.stringify(blob));
         this._dataKey = dataKey;
         this._vault = clone(vault);
+        this._rev++;
         this._hasData = true;
         this._corrupt = false;
 

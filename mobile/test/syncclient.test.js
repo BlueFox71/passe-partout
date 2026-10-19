@@ -187,9 +187,10 @@ async function runSync(native, api, code) {
   const qr = parseQr(await native.scanQr());
   const c = new SyncClient({ qr, post: (u, b, t) => native.post(u, b, t), crypto });
   const i = await api.sync_info();
-  const h = await c.hello(i);
+  const h = await c.hello(i, { pair: await api.sync_pair() });
   assert.equal(h.ok, true, JSON.stringify(h));
-  const vault = h.mode === "merge" ? await api.sync_payload() : null;
+  const payload = await api.sync_payload();
+  const vault = h.mode === "merge" ? payload : null;
   const r = await c.sync(syncMessage(i, h, { vault, code }));
   if (r.ok) await api.apply_sync({ ...r, pc: h.pc }, code);
   return { h, r, c };
@@ -265,4 +266,75 @@ test("parcours complet : téléphone neuf → code du PC → données → fusion
   pc.lock();
   const c4 = new SyncClient({ qr: qr4, post: (u2, b, t) => native.post(u2, b, t), crypto });
   await assert.rejects(c4.hello(await api.sync_info()), { code: "expired" });
+});
+
+// ---------------------------------------------------------------- appairage (Ruling 21)
+test("hello appairé : preuve envoyée (jamais le secret), preuve du PC exigée avant tout envoi", async () => {
+  const k = key();
+  const pair = crypto.b64u(new Uint8Array(32).fill(3));
+  const seen = [];
+  const pcProof = await crypto.pairProof(crypto.unb64u(pair), k, crypto.PROOF_PC);
+  const phoneProof = await crypto.pairProof(crypto.unb64u(pair), k, crypto.PROOF_PHONE);
+  const mk = (reply) => new SyncClient({
+    qr: parseQr(qrText({ key: crypto.b64u(k), hosts: ["10.0.0.1"] })),
+    post: fakePost(k, { "10.0.0.1": async (m) => { seen.push(m); return { reply }; } }), crypto,
+  });
+  // bon PC : preuve valide
+  const ok = mk({ ...HELLO, need_code: false, mode: "merge", proof_pc: pcProof });
+  const h = await ok.hello(info({ pair: "ne doit pas partir" }), { pair });
+  assert.equal(h.ok, true);
+  assert.equal(seen[0].proof, phoneProof);
+  assert.ok(!("pair" in seen[0]) && !JSON.stringify(seen[0]).includes(pair));
+  // faux PC : pas de preuve, ou preuve fausse → « unpaired », et sync impossible (ni code ni coffre)
+  for (const bad of [undefined, "x", phoneProof]) {
+    const c = mk({ ...HELLO, proof_pc: bad });
+    await assert.rejects(c.hello(info(), { pair }), (e) => e.code === "unpaired" && /Ré-appairer/.test(e.message));
+    await assert.rejects(c.sync(syncMessage(info(), HELLO, { code: "1234" })), /hello d'abord/);
+  }
+  // téléphone sans secret (neuf, corrompu, d'avant l'appairage) : pas de preuve, pas de vérification
+  seen.length = 0;
+  const fresh = mk({ ...HELLO });
+  assert.equal((await fresh.hello(info())).ok, true);
+  assert.ok(!("proof" in seen[0]));
+});
+
+test("parcours appairé : faux PC refusé avant code et coffre ; PC qui a oublié le téléphone → Ré-appairer", async () => {
+  const store = nativeFake.memoryStore();
+  const native = nativeFake.create({ store });
+  const pc = native.simulatePc({ code: "1234", vault: pcVault(), lockMode: "pin", pcName: "PC-Jules" });
+  const api = new LocalApi({ native, clock: () => Date.now(), iterations: ITER });
+  const first = await runSync(native, api, "1234");
+  assert.equal(typeof first.r.pair, "string");
+  assert.equal(await api.sync_pair(), first.r.pair);
+  const second = await runSync(native, api, null);
+  assert.equal(second.h.need_code, false);
+  assert.equal(typeof second.h.proof_pc, "string");
+
+  // faux PC (QR d'un autre « PC ») : refus au hello, il n'a reçu ni code ni coffre
+  const forger = nativeFake.create({ store: nativeFake.memoryStore() });
+  const fakePc = forger.simulatePc({ code: "0000", vault: pcVault(), lockMode: "pin", pcName: "PC-Jules" });
+  const fq = parseQr(await forger.scanQr());
+  const fc = new SyncClient({ qr: fq, post: (u, b, t) => forger.post(u, b, t), crypto });
+  await assert.rejects(fc.hello(await api.sync_info(), { pair: await api.sync_pair() }), { code: "unpaired" });
+  assert.deepEqual(fakePc.log, [{ type: "hello", code: false, vault: false }]);
+
+  // le vrai PC a oublié le téléphone : refus, puis « Ré-appairer » → code demandé, nouveau secret
+  pc.forget((await api.sync_info()).device_id);
+  const q = parseQr(await native.scanQr());
+  const c = new SyncClient({ qr: q, post: (u, b, t) => native.post(u, b, t), crypto });
+  await assert.rejects(c.hello(await api.sync_info(), { pair: await api.sync_pair() }), { code: "unpaired" });
+  await c.cancel();
+  await api.forget_pair();
+  const again = await runSync(native, api, "1234");
+  assert.equal(again.h.need_code, true);
+  assert.equal(again.r.ok, true);
+  assert.notEqual(again.r.pair, first.r.pair);
+  assert.equal(await api.sync_pair(), again.r.pair);
+
+  // restauration sur le PC : code exigé même avec une preuve valide, puis nouveau secret
+  pc.restore();
+  const restored = await runSync(native, api, "1234");
+  assert.equal(restored.h.need_code, true);
+  assert.equal(restored.h.reason, "restored");
+  assert.notEqual(restored.r.pair, again.r.pair);
 });

@@ -7,8 +7,10 @@
 // sinon PPM.nativeFake.memoryStore() (mémoire). PPM.nativeFake est lui-même une instance par défaut.
 // Commandes de test : setBiometricError(code|null), setUnwrapError(code|null), setBiometricAvailable(bool),
 // setNextQr(texte), firePause(), fireResume(), fireBack() ; `clipboard` = dernière copie {text, sensitive, seconds}.
+// inNativeScreen() : vrai pendant un écran natif lancé par l'appli (scanner, empreinte), comme le natif réel
+// (Ruling 23 : ces écrans ne comptent pas comme arrière-plan pour le verrouillage à 30 s).
 // Codes d'erreur de unwrap, comme le natif réel : KEY_MISSING (clé absente ou effacée), BAD_BLOB (blob mal
-// formé ou d'une autre clé), KEY_INVALIDATED, CANCELED, FAILED (erreur passagère).
+// formé ou d'une autre clé), KEY_INVALIDATED, CANCELED, LOCKOUT (trop d'essais d'empreinte), FAILED.
 // simulatePc({code, vault, lockMode, pinLength, pcName}) : PC simulé (aperçu et tests uniquement) ; scanQr
 // renvoie alors un nouveau QR de ce PC et post() lui répond comme app/syncflow.py (voir simulatedPc).
 (function (root) {
@@ -79,6 +81,17 @@
     let bioAvailable = true;
     let nextQr = null;
     let simPc = null;
+    let screens = 0; // écrans natifs ouverts par l'appli
+
+    // Exécute fn pendant un « écran natif » (le compteur couvre toute la durée de l'appel).
+    async function onScreen(fn) {
+      screens++;
+      try {
+        return await fn();
+      } finally {
+        screens--;
+      }
+    }
 
     // Clé « Keystore » par alias, créée à la demande ; deleteKey la détruit (anciens blobs illisibles).
     function keyId(alias, createIt) {
@@ -98,24 +111,32 @@
       store,
       clipboard: null,
 
-      async wrap(alias, bytes, { biometric = false } = {}) {
-        if (biometric) {
-          if (!bioAvailable) throw nativeError("FAILED", "Empreinte indisponible");
-          if (bioError) throw nativeError(bioError);
-        }
-        return `${BLOB}${alias}:${keyId(alias, true)}:${biometric ? 1 : 0}:${b64(bytes)}`;
+      wrap(alias, bytes, { biometric = false } = {}) {
+        const run = async () => {
+          if (biometric) {
+            if (!bioAvailable) throw nativeError("FAILED", "Empreinte indisponible");
+            if (bioError) throw nativeError(bioError);
+          }
+          return `${BLOB}${alias}:${keyId(alias, true)}:${biometric ? 1 : 0}:${b64(bytes)}`;
+        };
+        return biometric ? onScreen(run) : run(); // invite d'empreinte
       },
 
-      async unwrap(alias, blob, { title } = {}) { // eslint-disable-line no-unused-vars
-        if (unwrapError) throw nativeError(unwrapError);
+      unwrap(alias, blob, { title } = {}) { // eslint-disable-line no-unused-vars
         const p = parseBlob(blob);
-        if (!p || p.alias !== alias) throw nativeError("BAD_BLOB");
-        const id = keyId(alias, false);
-        if (!id) throw nativeError("KEY_MISSING");
-        if (p.keyId !== id) throw nativeError("BAD_BLOB"); // clé recréée depuis : blob illisible
-        if (p.bio && bioError) throw nativeError(bioError);
-        return unb64(p.data);
+        const run = async () => {
+          if (unwrapError) throw nativeError(unwrapError);
+          if (!p || p.alias !== alias) throw nativeError("BAD_BLOB");
+          const id = keyId(alias, false);
+          if (!id) throw nativeError("KEY_MISSING");
+          if (p.keyId !== id) throw nativeError("BAD_BLOB"); // clé recréée depuis : blob illisible
+          if (p.bio && bioError) throw nativeError(bioError);
+          return unb64(p.data);
+        };
+        return p && p.bio ? onScreen(run) : run(); // clé à empreinte : invite d'empreinte
       },
+
+      inNativeScreen() { return screens > 0; },
 
       async deleteKey(alias) {
         store.removeItem(KEY + alias);
@@ -160,16 +181,18 @@
       },
 
       // Dans le navigateur : texte du QR saisi dans une fenêtre PP.modal ; ailleurs, valeur de setNextQr.
-      async scanQr() {
-        if (nextQr !== null) {
-          const t = nextQr;
-          nextQr = null;
-          return t;
-        }
-        if (simPc) return simPc.newQr();
-        const PP = root.PP;
-        if (!PP || !PP.modal || typeof document === "undefined") return null;
-        return askQr(PP);
+      scanQr() {
+        return onScreen(async () => {
+          if (nextQr !== null) {
+            const t = nextQr;
+            nextQr = null;
+            return t;
+          }
+          if (simPc) return simPc.newQr();
+          const PP = root.PP;
+          if (!PP || !PP.modal || typeof document === "undefined") return null;
+          return askQr(PP);
+        });
       },
 
       async post(url, body, timeoutMs) {
@@ -197,7 +220,9 @@
 
   // ---------------------------------------------------------------- PC simulé (aperçu, tests)
   // Imite app/sync.py + app/syncflow.py pour le parcours normal : session à usage unique par QR, un seul
-  // hello, code exigé (appareil inconnu, code changé), remplacement au premier lancement, sinon fusion
+  // hello, code exigé (appareil inconnu ou sans preuve d'appairage valide, code changé, restauration),
+// appairage comme le PC (secret par appareil après une synchro avec code, preuves HMAC, Ruling 21),
+// remplacement au premier lancement, sinon fusion
   // simplifiée (le plus récent gagne, pierres tombales appliquées). Pas de contrôle d'heure ; délai
   // anti-essais simplifié (30 s après 3 codes faux). Aucune sécurité : jamais utilisé sur un vrai téléphone.
   const SIM_HOSTS = ["172.31.240.1", "192.168.1.42"]; // le 1er imite un adaptateur virtuel qui ne répond pas
@@ -212,8 +237,9 @@
     delete pcVault.version;
     let pcCode = String(code);
     let codeVersion = hex(8);
-    const generation = hex(8);
-    const devices = new Set();
+    let generation = hex(8);
+    const devices = new Map(); // device_id → secret d'appairage (base64url)
+    const log = []; // messages reçus : {type, code, vault} (présence seulement), pour les tests
     let fails = 0;
     let blockedUntil = 0;
     let session = null; // {key, hello, state, seen}
@@ -222,10 +248,14 @@
       lock_mode: lockMode, pin_length: lockMode === "pin" ? (pinLength || pcCode.length) : null,
     });
 
-    function hello(msg) {
+    async function hello(msg) {
       if (session.hello) return refuse("invalid", SIM_INVALID);
-      const known = devices.has(msg.device_id);
-      const needCode = !known || msg.code_version !== codeVersion || msg.generation !== generation;
+      const pair = devices.get(msg.device_id);
+      let proven = false;
+      if (pair && typeof msg.proof === "string" && msg.proof) {
+        proven = C.sameText(msg.proof, await C.pairProof(C.unb64u(pair), session.key, C.PROOF_PHONE));
+      }
+      const needCode = !proven || msg.code_version !== codeVersion || msg.generation !== generation;
       let mode = "merge";
       let reason = null;
       if (!msg.has_data) [mode, reason] = ["replace", "first"];
@@ -234,6 +264,7 @@
       session.hello = { device_id: msg.device_id, need_code: needCode, mode, last_sync: msg.last_sync ?? null };
       const reply = { ok: true, pc: pcName, ...lockInfo(), need_code: needCode, mode, reason,
         since: msg.last_sync ?? null };
+      if (proven) reply.proof_pc = await C.pairProof(C.unb64u(pair), session.key, C.PROOF_PC);
       if (!needCode) reply.code_version = codeVersion;
       return reply;
     }
@@ -288,13 +319,17 @@
         pcVault = m.vault;
         summary = m.summary;
       }
-      devices.add(h.device_id);
+      const newPair = h.need_code ? C.b64u(C.randomBytes(32)) : null; // nouveau secret après le code
+      devices.set(h.device_id, newPair || devices.get(h.device_id));
       session.state = "done";
-      return { ok: true, vault: { version: 1, ...clone(pcVault) }, summary, code_version: codeVersion,
+      const reply = { ok: true, vault: { version: 1, ...clone(pcVault) }, summary, code_version: codeVersion,
         generation, synced_at: msg.now, ...lockInfo() };
+      if (newPair) reply.pair = newPair;
+      return reply;
     }
 
     async function handle(msg) {
+      log.push({ type: msg.type, code: msg.code != null, vault: msg.vault != null });
       if (msg.type === "cancel") {
         session.state = "closed";
         return { ok: true };
@@ -306,6 +341,11 @@
 
     return {
       get vault() { return clone(pcVault); },
+      get log() { return log.slice(); },
+      // « Oublier ce téléphone » sur le PC : appareil et secret effacés
+      forget(deviceId) { devices.delete(deviceId); },
+      // restauration d'une sauvegarde : nouvelle génération (le registre restauré garde les secrets)
+      restore() { generation = hex(8); },
       // nouveau QR = nouvelle session (l'ancienne est abandonnée, comme sur le PC)
       newQr() {
         const key = C.randomBytes(32);

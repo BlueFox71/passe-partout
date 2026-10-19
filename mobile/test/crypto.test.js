@@ -63,3 +63,13 @@ test("coffre : aller-retour puis altéré → corrupt", async () => {
 test("itérations par défaut ≥ 600000", () => {
   assert.ok(C.PBKDF2_ITERATIONS >= 600000);
 });
+
+test("preuves d'appairage identiques au PC (app/syncflow.pair_proof)", async () => {
+  const pair = new Uint8Array(32).fill(7);
+  const qrKey = Uint8Array.from({ length: 32 }, (_, i) => i);
+  assert.equal(await C.pairProof(pair, qrKey, C.PROOF_PHONE), "LK9X3j6C2YSZ-tHwH-GiYIBzyv7Rg_672Uhv72hDgPc");
+  assert.equal(await C.pairProof(pair, qrKey, C.PROOF_PC), "tnTnnFeLDY9kot0rXBNCGtBEXD6LnJEZT6XcSmujnt4");
+  assert.equal(C.sameText("abc", "abc"), true);
+  assert.equal(C.sameText("abc", "abd"), false);
+  assert.equal(C.sameText("abc", undefined), false);
+});
