@@ -1,0 +1,303 @@
+"""Dialogue de synchro PC ↔ téléphone : messages « hello » puis « sync » (déjà déchiffrés par SyncSession).
+
+Une instance de SyncFlow vit le temps d'une session : « sync » n'est accepté qu'après un « hello » réussi,
+dont il reprend le mode (fusion ou remplacement) et le besoin de code. Toute erreur est renvoyée sous la
+forme {"ok": False, "error": <code>, "message": <texte>} ; aucun code ni mot de passe n'y figure.
+"""
+from __future__ import annotations
+
+import math
+from datetime import datetime, timedelta
+from typing import Callable
+
+from app.lockout import Lockout
+from app.merge import TOMBSTONE_DAYS, merge
+from app.model import Vault
+from app.store import VaultStore
+
+MAX_SKEW_SECONDS = 300
+
+_MESSAGES = {
+    "no_lock": "Définis d'abord un code (PIN ou mot de passe) sur le PC pour synchroniser le téléphone.",
+    "locked": "Le coffre du PC est verrouillé : déverrouille-le puis recommence.",
+    "code_required": "Saisis le code du PC.",
+    "bad_code": "Code incorrect.",
+    "invalid": "Message de synchronisation invalide.",
+}
+_KINDS = ("account", "giftcard", "profile")
+
+
+class _Refused(Exception):
+    def __init__(self, error: str, message: str | None = None, **extra):
+        super().__init__(error)
+        self.reply = {"ok": False, "error": error, "message": message or _MESSAGES[error], **extra}
+
+
+# ---------------------------------------------------------------- validation
+def _invalid(what: str):
+    raise ValueError(f"Champ invalide : {what}")
+
+
+def _str(d: dict, key: str, *, required=False, nonempty=False, optional=False) -> str | None:
+    if key not in d:
+        if required:
+            _invalid(key)
+        return None
+    v = d[key]
+    if v is None and optional:
+        return None
+    if not isinstance(v, str) or (nonempty and not v):
+        _invalid(key)
+    return v
+
+
+def _date(v, what: str) -> datetime:
+    if not isinstance(v, str):
+        _invalid(what)
+    try:
+        dt = datetime.fromisoformat(v)
+    except ValueError:
+        _invalid(what)
+    if dt.tzinfo is not None:
+        _invalid(what)
+    return dt
+
+
+def _amount(v, what: str, *, positive=False) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 or (positive and v == 0):
+        _invalid(what)
+    return float(v)
+
+
+def _image(d: dict, key: str) -> None:
+    v = d.get(key)
+    if v is not None and not (isinstance(v, str) and v.startswith("data:image/")):
+        _invalid(key)
+
+
+def _profile_ids(d: dict) -> None:
+    p = d.get("profiles", [])
+    if not isinstance(p, list) or not all(isinstance(x, str) for x in p):
+        _invalid("profiles")
+
+
+def _item(d, kind: str, str_fields: tuple, opt_str_fields: tuple) -> dict:
+    if not isinstance(d, dict):
+        _invalid(kind)
+    _str(d, "id", required=True, nonempty=True)
+    _str(d, "name", required=True, nonempty=True)
+    _date(d.get("updated"), "updated")
+    for k in str_fields:
+        _str(d, k)
+    for k in opt_str_fields:
+        _str(d, k, optional=True)
+    return d
+
+
+def validate_phone_vault(d: dict) -> Vault:
+    """Vérifie le coffre envoyé par le téléphone et le convertit ; ValueError si structure ou types invalides."""
+    if not isinstance(d, dict):
+        _invalid("vault")
+    for key in ("profiles", "accounts", "giftcards", "deleted"):
+        if not isinstance(d.get(key), list):
+            _invalid(key)
+
+    profiles = [_item(p, "profile", (), ("avatar", "color")) for p in d["profiles"]]
+    accounts = []
+    for a in d["accounts"]:
+        _item(a, "account", ("category", "login", "password"), ("login_mask", "password_mask"))
+        _image(a, "image")
+        _profile_ids(a)
+        if not isinstance(a.get("favorite", False), bool):
+            _invalid("favorite")
+        if "created" in a:
+            _date(a["created"], "created")
+        accounts.append(a)
+    giftcards = []
+    for g in d["giftcards"]:
+        _item(g, "giftcard", ("code", "pin"), ("end_date",))
+        _image(g, "image")
+        _profile_ids(g)
+        if g.get("initial") is not None:
+            _amount(g["initial"], "initial")
+        _amount(g.get("remaining", 0.0), "remaining")
+        history = g.get("history", [])
+        if not isinstance(history, list):
+            _invalid("history")
+        for h in history:
+            if not isinstance(h, dict):
+                _invalid("history")
+            _str(h, "id", required=True, nonempty=True)
+            _str(h, "date", required=True)
+            _amount(h.get("amount"), "amount", positive=True)
+        giftcards.append(g)
+    for t in d["deleted"]:
+        if not isinstance(t, dict) or t.get("kind") not in _KINDS:
+            _invalid("deleted")
+        _str(t, "id", required=True, nonempty=True)
+        _date(t.get("at"), "deleted")
+
+    for name, items in (("profiles", profiles), ("accounts", accounts), ("giftcards", giftcards)):
+        ids = [i["id"] for i in items]
+        if len(ids) != len(set(ids)):
+            _invalid(f"{name} (id en double)")
+    try:
+        return Vault.from_dict({"profiles": profiles, "accounts": accounts, "giftcards": giftcards,
+                                "deleted": d["deleted"]})
+    except (TypeError, AttributeError) as e:
+        raise ValueError("Coffre du téléphone invalide") from e
+
+
+# ---------------------------------------------------------------- dialogue
+class SyncFlow:
+    def __init__(self, store: VaultStore, lockout: Lockout, persist_lockout: Callable[[], None],
+                 config: Callable[[], dict], pc_name: str, now: Callable[[], datetime] = datetime.now):
+        self._store = store
+        self._lockout = lockout
+        self._persist_lockout = persist_lockout
+        self._config = config
+        self._pc_name = pc_name
+        self._now = now
+        self._hello: dict | None = None  # résultat du hello : device_id, need_code, mode
+        self.device_name: str | None = None
+        self.summary: dict | None = None
+
+    def handle(self, msg: dict) -> dict:
+        """Aiguille un message déchiffré du téléphone sur « hello », « sync » ou « cancel »."""
+        kind = msg.get("type") if isinstance(msg, dict) else None
+        if kind == "cancel":
+            return {"ok": True}
+        try:
+            if kind == "hello":
+                return self._on_hello(msg)
+            if kind == "sync":
+                return self._on_sync(msg)
+            raise _Refused("invalid")
+        except _Refused as r:
+            return r.reply
+        except ValueError:
+            return _Refused("invalid").reply
+
+    # ------------------------------------------------------------ communs
+    def _pc_now(self) -> datetime:
+        return self._now().replace(microsecond=0, tzinfo=None)
+
+    def _check_clock(self, msg: dict) -> datetime:
+        phone = _date(msg.get("now"), "now")
+        pc = self._pc_now()
+        skew = abs((phone - pc).total_seconds())
+        if skew > MAX_SKEW_SECONDS:
+            minutes = max(1, round(skew / 60))
+            raise _Refused("clock", f"L'heure du téléphone diffère de celle du PC de {minutes} min : "
+                                    "active l'heure automatique.")
+        return pc
+
+    def _check_store(self) -> None:
+        if not self._store.is_encrypted():
+            raise _Refused("no_lock")
+        if self._store.vault is None:
+            raise _Refused("locked")
+
+    def _lock_info(self) -> tuple[str, int | None]:
+        cfg = self._config()
+        mode = cfg.get("lock_mode")
+        mode = mode if mode in ("pin", "password") else "unknown"
+        return mode, (cfg.get("pin_length") if mode == "pin" else None)
+
+    def _generation(self) -> int:
+        return int(self._config().get("generation") or 0)
+
+    @staticmethod
+    def _last_sync(msg: dict) -> str | None:
+        v = msg.get("last_sync")
+        if v is not None:
+            _date(v, "last_sync")
+        return v
+
+    # ------------------------------------------------------------ hello
+    def _on_hello(self, msg: dict) -> dict:
+        device_id = _str(msg, "device_id", required=True, nonempty=True)
+        device_name = _str(msg, "device_name", required=True)
+        generation = msg.get("generation")
+        if generation is not None and (isinstance(generation, bool) or not isinstance(generation, int)):
+            _invalid("generation")
+        last_sync = self._last_sync(msg)
+        code_version = _str(msg, "code_version", optional=True)
+        has_data = msg.get("has_data")
+        if not isinstance(has_data, bool):
+            _invalid("has_data")
+        now = self._check_clock(msg)
+        self._check_store()
+
+        need_code = code_version != self._store.code_version()
+        if not has_data:
+            mode, reason = "replace", "first"
+        elif generation != self._generation():
+            mode, reason = "replace", "restored"
+        elif last_sync is None or now - datetime.fromisoformat(last_sync) > timedelta(days=TOMBSTONE_DAYS):
+            mode, reason = "replace", "stale"
+        else:
+            mode, reason = "merge", None
+        self._hello = {"device_id": device_id, "need_code": need_code, "mode": mode}
+        self.device_name = device_name
+        lock_mode, pin_length = self._lock_info()
+        return {"ok": True, "pc": self._pc_name, "lock_mode": lock_mode, "pin_length": pin_length,
+                "code_version": self._store.code_version(), "need_code": need_code, "mode": mode,
+                "reason": reason, "since": last_sync}
+
+    # ------------------------------------------------------------ sync
+    def _check_code(self, code) -> None:
+        if not isinstance(code, str) or not code:
+            raise _Refused("code_required")
+        wait = self._lockout.wait_seconds()
+        if wait > 0:
+            raise _Refused("bad_code", wait_seconds=wait)
+        if not self._store.verify_code(code):
+            self._lockout.fail()
+            self._persist_lockout()
+            raise _Refused("bad_code", wait_seconds=self._lockout.wait_seconds())
+        self._lockout.success()
+        self._persist_lockout()
+
+    def _on_sync(self, msg: dict) -> dict:
+        hello = self._hello
+        if hello is None:
+            raise _Refused("invalid")
+        device_id = _str(msg, "device_id", required=True, nonempty=True)
+        device_name = _str(msg, "device_name", required=True)
+        if device_id != hello["device_id"]:
+            _invalid("device_id")
+        replace = msg.get("replace", False)
+        if not isinstance(replace, bool) or replace != (hello["mode"] == "replace"):
+            _invalid("replace")
+        last_sync = self._last_sync(msg)
+        now = self._check_clock(msg)
+        self._check_store()
+        phone = None if replace else validate_phone_vault(msg.get("vault"))
+        if hello["need_code"]:
+            self._check_code(msg.get("code"))
+
+        synced_at = now.isoformat(timespec="seconds")
+        pc_vault = self._store.vault
+        if replace:
+            vault = Vault.from_dict(pc_vault.to_dict())
+            items = len(vault.profiles) + len(vault.accounts) + len(vault.giftcards)
+            summary = {"to_pc": 0, "to_phone": items, "deleted": 0, "conflicts": 0}
+        else:
+            result = merge(pc_vault, phone, last_sync, synced_at)
+            vault = result.vault
+            summary = {"to_pc": result.to_pc, "to_phone": result.to_phone, "deleted": result.deleted,
+                       "conflicts": result.conflicts}
+        vault.sync.setdefault("devices", {})[device_id] = {"name": device_name, "last_sync": synced_at}
+        # remplacement : seul le registre des appareils change, pas besoin de sauvegarde automatique
+        self._store.save(vault, backup=not replace)
+
+        self.device_name = device_name
+        self.summary = summary
+        out = vault.to_dict()
+        out.pop("settings", None)
+        out.pop("sync", None)
+        lock_mode, pin_length = self._lock_info()
+        return {"ok": True, "vault": out, "summary": summary, "code_version": self._store.code_version(),
+                "generation": self._generation(), "synced_at": synced_at, "lock_mode": lock_mode,
+                "pin_length": pin_length}
