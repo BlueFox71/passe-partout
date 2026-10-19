@@ -124,7 +124,7 @@
       code = "";
       drawDots();
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
-      // error « wait » : délai en cours, code non essayé (voir rapport : LocalApi renvoie aujourd'hui « bad_code »)
+      // error « wait » : délai en cours, code non essayé ; « bad_code » : code essayé et faux
       startWait(r.wait_seconds, r.error !== "wait");
       const pw = app.querySelector("#pw");
       if (pw) { pw.value = ""; pw.focus(); }

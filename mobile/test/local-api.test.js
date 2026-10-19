@@ -103,16 +103,16 @@ test("après apply_sync(premier, '1234') : unlock('1234') ok, unlock('0000') ref
 test("délai anti-essais : 1 s puis 2 s, conservé par une nouvelle instance sur les mêmes préférences", async () => {
   const { api, store, clk } = await synced();
   await api.lock();
-  assert.equal((await api.unlock("0000")).wait_seconds, 1);
-  // pendant l'attente, même le bon code est refusé sans être essayé
-  assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 1, error: "bad_code" });
+  assert.deepEqual(await api.unlock("0000"), { ok: false, wait_seconds: 1, error: "bad_code" });
+  // pendant l'attente, même le bon code est refusé sans être essayé : « wait » (un code essayé et faux : « bad_code »)
+  assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 1, error: "wait" });
   clk.now += 1000;
-  assert.equal((await api.unlock("9999")).wait_seconds, 2);
+  assert.deepEqual(await api.unlock("9999"), { ok: false, wait_seconds: 2, error: "bad_code" });
   // « redémarrage » de l'appli : nouvelle instance, mêmes préférences
   const native2 = nativeFake.create({ store });
   const api2 = new LocalApi({ native: native2, clock: () => clk.now, iterations: ITER });
   assert.equal((await api2.get_state()).locked, true);
-  assert.deepEqual(await api2.unlock("1234"), { ok: false, wait_seconds: 2, error: "bad_code" });
+  assert.deepEqual(await api2.unlock("1234"), { ok: false, wait_seconds: 2, error: "wait" });
   clk.now += 2000;
   assert.deepEqual(await api2.unlock("1234"), { ok: true, wait_seconds: 0 });
   assert.deepEqual(await native2.getPref("pp.lockout"), { fails: 0, until: 0 });

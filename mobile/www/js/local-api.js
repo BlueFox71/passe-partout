@@ -331,7 +331,7 @@
     unlock(code) {
       return this._run(async () => {
         const wait = this._lockout.waitSeconds();
-        if (wait > 0) return { ok: false, wait_seconds: wait, error: "bad_code" };
+        if (wait > 0) return { ok: false, wait_seconds: wait, error: "wait" }; // délai en cours : code non essayé
         const corrupt = { ok: false, wait_seconds: 0, error: "corrupt" };
         if (!this._hasData) return corrupt;
         code = String(code ?? "");
