@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
-from app.model import GiftCard
+from app.model import GiftCard, new_id, now_iso
 
 
 def spend(card: GiftCard, amount: float, today: date) -> GiftCard:
@@ -16,7 +16,8 @@ def spend(card: GiftCard, amount: float, today: date) -> GiftCard:
     return replace(
         card,
         remaining=round(card.remaining - amount, 2),
-        history=[*card.history, {"date": today.isoformat(), "amount": amount}],
+        history=[*card.history, {"id": new_id(), "date": today.isoformat(), "amount": amount}],
+        updated=now_iso(),
     )
 
 

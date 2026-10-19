@@ -23,7 +23,7 @@ from app.exporter import export_png, export_text
 from app.images import normalize_image as _normalize_image
 from app.importer import import_xlsx
 from app.lockout import Lockout
-from app.model import Account, GiftCard, Profile, Vault, new_id, now_iso
+from app.model import Account, GiftCard, Profile, Vault, new_id, now_iso, tombstone
 from app.store import VaultCorrupt, VaultStore
 from app.textutil import normalize
 
@@ -217,6 +217,9 @@ class Api:
         if "/" in name or "\\" in name:
             raise ValueError("Sauvegarde introuvable")
         self._store.restore(self._store.backup_dir / name)
+        # nouvelle génération : le téléphone saura que le coffre a été remplacé (et non modifié)
+        self._config["generation"] = int(self._config.get("generation") or 0) + 1
+        self._write_config()
         self._corrupt = False
         try:
             self._store.reload()
@@ -276,6 +279,7 @@ class Api:
     def delete_account(self, account_id: str) -> dict:
         v = self._vault()
         v.accounts = [a for a in v.accounts if a.id != account_id]
+        v.deleted.append(tombstone("account", account_id, now_iso()))
         self._save()
         return {}
 
@@ -337,6 +341,7 @@ class Api:
             image=data.get("image") or None,
             profiles=self._check_profiles(data.get("profiles")),
             history=existing.history if existing else [],
+            updated=now_iso(),
         )
         if existing:
             v.giftcards[v.giftcards.index(existing)] = card
@@ -349,6 +354,7 @@ class Api:
     def delete_giftcard(self, card_id: str) -> dict:
         v = self._vault()
         v.giftcards = [g for g in v.giftcards if g.id != card_id]
+        v.deleted.append(tombstone("giftcard", card_id, now_iso()))
         self._save()
         return {}
 
@@ -374,7 +380,8 @@ class Api:
         prof = Profile(id=existing.id if existing else new_id(), name=name,
                        avatar=data.get("avatar") or None,
                        color=data.get("color") if COLOR_RE.match(str(data.get("color") or ""))
-                       else PALETTE[len(v.profiles) % len(PALETTE)])
+                       else PALETTE[len(v.profiles) % len(PALETTE)],
+                       updated=now_iso())
         if existing:
             v.profiles[v.profiles.index(existing)] = prof
         else:
@@ -392,7 +399,9 @@ class Api:
         for item in [*v.accounts, *v.giftcards]:
             if profile_id in item.profiles:
                 item.profiles = [p for p in item.profiles if p != profile_id] or [reassign_to]
+                item.updated = now_iso()
         v.profiles = [p for p in v.profiles if p.id != profile_id]
+        v.deleted.append(tombstone("profile", profile_id, now_iso()))
         self._save()
         return {}
 
@@ -506,6 +515,7 @@ class Api:
                 img = wanted.get(item.id)
                 if img and not item.image and str(img).startswith("data:image/png;base64,"):
                     item.image = img
+                    item.updated = now_iso()
                     n += 1
         if n:
             self._save()
@@ -525,6 +535,7 @@ class Api:
                 if (pair and len(pair) == 2 and item.image and item.image == pair[0]
                         and str(pair[1]).startswith("data:image/png;base64,")):
                     item.image = pair[1]
+                    item.updated = now_iso()
                     n += 1
         if n:
             self._save()

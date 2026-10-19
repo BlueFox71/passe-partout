@@ -14,7 +14,8 @@ def card(name="C", remaining=50.0, end=None):
 
 def test_spend():
     c = spend(card(remaining=50.0), 12.5, TODAY)
-    assert c.remaining == 37.5 and c.history[-1] == {"date": "2026-10-18", "amount": 12.5}
+    entry = c.history[-1]
+    assert c.remaining == 37.5 and entry.pop("id") and entry == {"date": "2026-10-18", "amount": 12.5}
 
 
 def test_spend_arrondi():
