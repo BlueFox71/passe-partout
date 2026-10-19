@@ -83,7 +83,12 @@ def _merge_kind(kind, pc_items, phone_items, pc_graves, phone_graves, last_sync,
     for item_id in dict.fromkeys([*pc_by_id, *phone_by_id]):
         pc_item, phone_item = pc_by_id.get(item_id), phone_by_id.get(item_id)
         if pc_item and phone_item:
+            pc_before = _content(pc_item)  # _resolve peut compléter l'historique de pc_item
             item, copy = _resolve(kind, pc_item, phone_item, last_sync, now)
+            if _content(item) != pc_before:
+                # le PC change de version : horodaté maintenant, pour qu'un autre téléphone synchronisé
+                # entre-temps voie l'élément « modifié depuis sa dernière synchro » (pas de perte silencieuse)
+                item.updated = now
             if copy:
                 copies.append(copy)
         else:

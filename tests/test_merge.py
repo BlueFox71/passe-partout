@@ -232,3 +232,57 @@ def test_inputs_not_mutated():                         # to_dict() des entrées 
     r.vault.sync["devices"]["d1"]["name"] = "autre"
     r.vault.giftcards[0].history.append({"id": "hx", "date": "2026-10-19", "amount": 1})
     assert (pc.to_dict(), phone.to_dict()) == before
+
+
+def test_phone_version_adopted_gets_now_timestamp():
+    pc = vault([acc("a1", "Netflix", OLD, password="ancien")])
+    phone = vault([acc("a1", "Netflix", T1, password="nouveau")])
+    r = merge(pc, phone, LS, NOW)
+    assert r.vault.accounts[0].updated == NOW
+
+
+def test_unchanged_pc_version_keeps_its_timestamp():
+    pc = vault([acc("a1", "Netflix", T2, password="nouveau")])
+    phone = vault([acc("a1", "Netflix", OLD, password="ancien")])
+    r = merge(pc, phone, LS, NOW)
+    assert r.vault.accounts[0].updated == T2
+
+
+def test_two_phones_spend_not_lost():
+    oct5, oct6, oct7, oct8, oct9, oct10 = (f"2026-10-{d:02d}T10:00:00" for d in (5, 6, 7, 8, 9, 10))
+    h1 = {"id": "h1", "date": "2026-10-05", "amount": 10}
+    h2 = {"id": "h2", "date": "2026-10-06", "amount": 5}
+    h3 = {"id": "h3", "date": "2026-10-09", "amount": 1}
+    pc = vault(giftcards=[card("g1", "Fnac", oct5, remaining=40.0, history=[h1])])
+    phone_c = copy_of(pc)                                       # C se synchronise le 7 octobre
+    phone_a = vault(giftcards=[card("g1", "Fnac", oct6, remaining=45.0, history=[h2])])  # A : dernière synchro le 1er
+    after_a = merge(pc, phone_a, LS, oct8).vault
+    phone_c.giftcards[0] = card("g1", "Fnac", oct9, remaining=39.0, history=[h1, h3])
+    r = merge(after_a, phone_c, oct7, oct10)
+    g = r.vault.giftcards[0]
+    assert [h["id"] for h in g.history] == ["h1", "h2", "h3"] and g.remaining == 34.0
+    assert r.conflicts == 0
+
+
+def test_two_phones_account_edit_not_lost():
+    oct6, oct7, oct8, oct9, oct10 = (f"2026-10-{d:02d}T10:00:00" for d in (6, 7, 8, 9, 10))
+    pc = vault([acc("a1", "Netflix", OLD, password="base")])
+    phone_c = copy_of(pc)                                       # C se synchronise le 7 octobre
+    phone_a = vault([acc("a1", "Netflix", oct6, password="A")])  # A : dernière synchro le 1er
+    after_a = merge(pc, phone_a, LS, oct8).vault
+    phone_c.accounts[0] = acc("a1", "Netflix", oct9, password="C")
+    r = merge(after_a, phone_c, oct7, oct10)
+    assert sorted((a.name, a.password) for a in r.vault.accounts) == [("Netflix", "C"), ("Netflix (copie PC)", "A")]
+    assert r.conflicts == 1
+
+
+def test_retry_is_idempotent_when_phone_won_first_time():
+    pc = vault([acc("a1", "Netflix", T1, password="pc")],
+               [card("g1", "Fnac", T1, remaining=40.0, history=[{"id": "h1", "date": "2026-10-05", "amount": 10}])])
+    phone = vault([acc("a1", "Netflix", T2, password="tel")],
+                  [card("g1", "Fnac", T2, remaining=45.0, history=[{"id": "h2", "date": "2026-10-06", "amount": 5}])])
+    first = merge(pc, phone, LS, NOW)
+    assert [a.name for a in first.vault.accounts] == ["Netflix", "Netflix (copie PC)"]
+    again = merge(first.vault, phone, LS, NOW)
+    assert again.conflicts == 0 and again.to_pc == 0
+    assert again.vault.to_dict() == first.vault.to_dict()
