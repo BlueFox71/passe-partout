@@ -12,6 +12,7 @@
   let press = null; // pavé PIN affiché actuellement (null sinon)
   let forced = null; // « pin » ou « password » choisi par la bascule, sinon le mode enregistré
   let bioTried = false; // empreinte déjà proposée automatiquement pour cet écran
+  let renderSeq = 0; // jeton d'affichage : une vérification lancée par un écran remplacé est ignorée
 
   // Un seul écouteur clavier (aperçu sur ordinateur) : réafficher l'écran ne doit pas doubler les touches.
   window.addEventListener("keydown", (e) => {
@@ -46,6 +47,8 @@
   };
 
   function render() {
+    const token = ++renderSeq;
+    const live = () => token === renderSeq;
     code = "";
     press = null;
     clearInterval(waitTimer);
@@ -83,36 +86,46 @@
     let busy = false;
     let waiting = false;
 
-    app.querySelector("#switch").addEventListener("click", () => {
+    const switchBtn = app.querySelector("#switch");
+    const setBusy = (v) => { busy = v; switchBtn.disabled = v; };
+    switchBtn.addEventListener("click", () => {
+      if (busy) return; // pas de nouvel écran pendant une vérification
       forced = isPin ? "password" : "pin";
       render();
     });
 
-    const startWait = (secs) => {
+    // `tested` : faux quand le code n'a pas été essayé (délai anti-essais encore en cours) :
+    // seul « Réessaie dans N s » s'affiche alors.
+    const startWait = (secs, tested = true) => {
       clearInterval(waitTimer);
       let left = Math.max(0, Math.ceil(Number(secs) || 0));
+      const head = tested ? "Code incorrect" : "";
+      let timer = null;
       const tick = () => {
+        if (!live()) { clearInterval(timer); return; } // écran remplacé : ne touche pas au nouveau
         if (left <= 0) {
-          clearInterval(waitTimer);
+          clearInterval(timer);
           waiting = false;
           card.classList.remove("waiting");
-          err.textContent = "Code incorrect";
+          err.textContent = head;
           return;
         }
         waiting = true;
         card.classList.add("waiting");
-        err.innerHTML = `Code incorrect<br><span class="m-wait">Réessaie dans ${left} s</span>`;
+        const wait = `<span class="m-wait">Réessaie dans ${left} s</span>`;
+        err.innerHTML = head ? `${head}<br>${wait}` : wait;
         left--;
       };
       tick();
-      waitTimer = setInterval(tick, 1000);
+      timer = waitTimer = setInterval(tick, 1000);
     };
 
     const failed = (r) => {
       code = "";
       drawDots();
       card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
-      startWait(r.wait_seconds);
+      // error « wait » : délai en cours, code non essayé (voir rapport : LocalApi renvoie aujourd'hui « bad_code »)
+      startWait(r.wait_seconds, r.error !== "wait");
       const pw = app.querySelector("#pw");
       if (pw) { pw.value = ""; pw.focus(); }
     };
@@ -128,7 +141,7 @@
 
     const submit = async (value) => {
       if (!value || busy || waiting) return;
-      busy = true;
+      setBusy(true);
       card.classList.add("checking"); // points animés pendant la vérification (PBKDF2)
       err.textContent = "";
       const t0 = Date.now();
@@ -140,7 +153,8 @@
       }
       const left = MIN_CHECK_MS - (Date.now() - t0);
       if (left > 0) await sleep(left);
-      busy = false;
+      if (!live()) return; // écran remplacé entre-temps (verrouillage, nouvel affichage)
+      setBusy(false);
       card.classList.remove("checking");
       if (!r) { code = ""; drawDots(); return; }
       if (r.ok) return opened();
@@ -182,14 +196,15 @@
     const fp = app.querySelector("#fp");
     const tryBio = async () => {
       if (busy) return;
-      busy = true;
+      setBusy(true);
       let r;
       try {
         r = await PP.call("unlock_biometric");
       } catch (e) {
         r = null;
       }
-      busy = false;
+      if (!live()) return;
+      setBusy(false);
       if (!r) return;
       if (r.ok) return opened();
       if (r.error === "corrupt") return PP.route();

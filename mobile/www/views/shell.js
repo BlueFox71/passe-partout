@@ -1,6 +1,8 @@
 /* Téléphone — coquille de navigation : contenu de l'onglet + barre d'onglets du bas.
    Chaque onglet affiche PP.views.<accounts|cards|sync|settings>.show(conteneur) s'il existe
-   (Tâches 12 à 15), sinon « Bientôt disponible ». */
+   (Tâches 12 à 15), sinon « Bientôt disponible ».
+   Contrat (décision 14) : PP.views.sync.show(container?) — sans conteneur, la vue de synchro s'affiche
+   en plein écran (accueil, données illisibles : views/welcome.js) ; avec un conteneur, dans l'onglet Synchro. */
 (function () {
   const V = (PP.views.shell = {});
   const KEY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

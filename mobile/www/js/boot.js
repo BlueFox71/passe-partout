@@ -9,8 +9,22 @@
   const params = new URLSearchParams(location.search);
 
   // ---------------------------------------------------------------- natif
-  const isNative = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function"
-    && window.Capacitor.isNativePlatform() && PPM.native);
+  let nativePlatform = false;
+  try {
+    nativePlatform = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function"
+      && window.Capacitor.isNativePlatform());
+  } catch (e) { /* Capacitor inutilisable : traité comme un navigateur */ }
+  const isNative = nativePlatform;
+
+  // Sur un vrai téléphone, jamais de repli sur le natif simulé (clés en clair dans localStorage) :
+  // sans PPM.native, écran d'erreur et aucune donnée écrite.
+  if (nativePlatform && !PPM.native) {
+    PP.route = async () => {}; // ui/app.js (verrouillage, raccourcis) ne doit rien déclencher
+    PP.render(`<div class="m-screen"><div class="m-card glass"><h2>Démarrage impossible</h2>
+      <p>Le module de sécurité du téléphone est introuvable. Réinstalle Passe-Partout ;
+        aucune donnée n'a été enregistrée.</p></div></div>`);
+    return;
+  }
 
   // localStorage peut être bloqué (navigation privée, aperçu) : repli en mémoire, sans erreur.
   function localStore() {
