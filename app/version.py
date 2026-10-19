@@ -27,4 +27,12 @@ def compare_versions(a: str, b: str) -> int:
     return (pa > pb) - (pa < pb)
 
 
-VERSION = _chemin_version().read_text(encoding="utf-8").strip()
+def read_version_file(path: Path) -> str:
+    """Contenu de VERSION, sans BOM ni espaces ; erreur explicite si le fichier manque."""
+    try:
+        return path.read_text(encoding="utf-8-sig").strip()
+    except FileNotFoundError:
+        raise RuntimeError(f"Fichier VERSION introuvable ({path}) : il doit être fourni avec l'application.") from None
+
+
+VERSION = read_version_file(_chemin_version())

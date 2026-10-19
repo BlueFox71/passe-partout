@@ -46,8 +46,11 @@ try {
         Run 'npm ci' { npm ci }
     }
     # Version unique : fichier VERSION à la racine du dépôt (x.y.z) -> versionName / versionCode (x*10000 + y*100 + z)
-    $versionName = (Get-Content (Join-Path $mobile '..\VERSION') -Raw).Trim()
+    $versionName = (Get-Content (Join-Path $mobile '..\VERSION') -Raw -Encoding UTF8).Trim()
     if ($versionName -notmatch '^(\d+)\.(\d+)\.(\d+)$') { Fail "VERSION invalide : « $versionName »." }
+    if ([int]$Matches[2] -ge 100 -or [int]$Matches[3] -ge 100) {
+        Fail "VERSION « $versionName » : le 2e et le 3e nombre doivent rester inférieurs à 100 (versionCode = x*10000 + y*100 + z)."
+    }
     $versionCode = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
     Write-Host "Version : $versionName (versionCode $versionCode)"
     Run 'npm run assemble' { npm run assemble }

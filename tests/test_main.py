@@ -48,3 +48,20 @@ def test_geometrie_hors_ecran_ignoree():
     # ancienne sauvegarde d'une fenêtre maximisée (x=-8) : on repart d'une taille par défaut
     g = window_geometry({"width": 2576, "height": 1408, "x": -8, "y": -8})
     assert g["x"] is None and g["y"] is None and g["maximized"] is True
+
+
+def test_deuxieme_instance_message_sans_fenetre(tmp_path, monkeypatch):
+    from app import main
+    from app.instance import acquire_instance_lock, release_instance_lock
+
+    premier = acquire_instance_lock(tmp_path)
+    messages, fenetres = [], []
+    monkeypatch.setattr(main, "show_message", lambda texte, titre: messages.append((texte, titre)))
+    monkeypatch.setattr(main.webview, "create_window", lambda *a, **k: fenetres.append(a))
+    monkeypatch.setattr(main.webview, "start", lambda *a, **k: fenetres.append("start"))
+    try:
+        main.run(tmp_path)
+    finally:
+        release_instance_lock(premier)
+    assert messages == [("Passe-Partout est déjà ouvert.", "Passe-Partout")]
+    assert fenetres == []

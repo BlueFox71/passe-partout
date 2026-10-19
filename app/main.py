@@ -11,7 +11,9 @@ from pathlib import Path
 import webview
 
 from app.api import Api
+from app.instance import acquire_instance_lock
 from app.store import VaultStore
+from app.version import VERSION  # lu dès le lancement : un exe sans fichier VERSION échoue tout de suite
 from app.winclip import WinClipboard
 
 APP_NAME = "Passe-Partout"
@@ -118,9 +120,24 @@ def window_geometry(saved: dict) -> dict:
     return {"width": w, "height": h, "x": x, "y": y, "maximized": maximized}
 
 
+def show_message(text: str, title: str) -> None:
+    """Boîte de message Windows (information), affichée sans fenêtre principale."""
+    MB_ICONINFORMATION = 0x40
+    ctypes.windll.user32.MessageBoxW(None, text, title, MB_ICONINFORMATION)
+
+
+_instance_lock = None  # gardé ouvert toute la vie du processus
+
+
 def run(data_dir: Path | None = None) -> None:
-    configure_webview_env()
+    global _instance_lock
     data_dir = Path(data_dir) if data_dir else default_data_dir()
+    lock = acquire_instance_lock(data_dir)
+    if lock is None:
+        show_message(f"{APP_NAME} est déjà ouvert.", APP_NAME)
+        return
+    _instance_lock = lock
+    configure_webview_env()
     dialogs = Dialogs()
     clip = WinClipboard()
     api = Api(VaultStore(data_dir / "vault.json"), clip, dialogs=dialogs)

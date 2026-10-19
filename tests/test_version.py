@@ -27,3 +27,16 @@ def test_compare_versions_invalide():
 def test_version_file_matches_constant():
     racine = Path(__file__).resolve().parent.parent
     assert VERSION == (racine / "VERSION").read_text(encoding="utf-8").strip() == "1.0.0"
+
+
+def test_lecture_version_ignore_le_bom(tmp_path):
+    from app.version import read_version_file
+    f = tmp_path / "VERSION"
+    f.write_bytes(b"\xef\xbb\xbf2.3.4\r\n")
+    assert read_version_file(f) == "2.3.4"
+
+
+def test_lecture_version_absente_message_clair(tmp_path):
+    from app.version import read_version_file
+    with pytest.raises(RuntimeError, match="VERSION"):
+        read_version_file(tmp_path / "VERSION")
