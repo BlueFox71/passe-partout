@@ -31,6 +31,127 @@
 
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const strOrNull = (x) => (typeof x === "string" && x ? x : null);
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+
+  function parseJson(raw) {
+    if (typeof raw !== "string") return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------- validation du coffre reçu du PC
+  // Mêmes règles minimales que validate_phone_vault (app/syncflow.py) : ce coffre sera renvoyé au PC.
+  const TS_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
+  const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const KINDS = ["account", "giftcard", "profile"];
+
+  function invalid() {
+    throw new Error("Réponse de synchronisation invalide");
+  }
+
+  function realDate(m, withTime) {
+    const t = withTime ? [+m[4], +m[5], +m[6]] : [0, 0, 0];
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], ...t));
+    return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]
+      && d.getUTCHours() === t[0] && d.getUTCMinutes() === t[1] && d.getUTCSeconds() === t[2];
+  }
+
+  function checkTs(v) {
+    const m = typeof v === "string" ? TS_RE.exec(v) : null;
+    if (!m || !realDate(m, true)) invalid();
+  }
+
+  function checkDay(v) {
+    const m = typeof v === "string" ? DAY_RE.exec(v) : null;
+    if (!m || !realDate(m, false)) invalid();
+  }
+
+  function checkStr(d, key, { required = false, nullable = false } = {}) {
+    if (!(key in d)) {
+      if (required) invalid();
+      return;
+    }
+    const v = d[key];
+    if (v === null && nullable) return;
+    if (typeof v !== "string" || (required && !v)) invalid();
+  }
+
+  function checkAmount(v, positive = false) {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || (positive && v === 0)) invalid();
+  }
+
+  function checkImage(d, key) {
+    const v = d[key];
+    if (v != null && !(typeof v === "string" && v.startsWith("data:image/"))) invalid();
+  }
+
+  function checkItem(d, strs, optStrs) {
+    if (!isObj(d)) invalid();
+    checkStr(d, "id", { required: true });
+    checkStr(d, "name", { required: true });
+    checkTs(d.updated);
+    for (const k of strs) checkStr(d, k);
+    for (const k of optStrs) checkStr(d, k, { nullable: true });
+  }
+
+  // Listes d'ids de profils exigées (le PC les envoie toujours) : le téléphone les lit pour filtrer.
+  function checkProfileIds(d) {
+    if (!Array.isArray(d.profiles) || !d.profiles.every((x) => typeof x === "string")) invalid();
+  }
+
+  function onlyKeys(d, keys) {
+    if (!Object.keys(d).every((k) => keys.includes(k))) invalid();
+  }
+
+  function validateVault(rv) {
+    if (!isObj(rv)) invalid();
+    for (const k of ["profiles", "accounts", "giftcards", "deleted"]) if (!Array.isArray(rv[k])) invalid();
+    for (const p of rv.profiles) {
+      checkItem(p, [], ["avatar", "color"]);
+      checkImage(p, "avatar");
+    }
+    for (const a of rv.accounts) {
+      checkItem(a, ["category", "login", "password"], ["login_mask", "password_mask"]);
+      checkImage(a, "image");
+      checkProfileIds(a);
+      if ("favorite" in a && typeof a.favorite !== "boolean") invalid();
+      if ("created" in a) checkTs(a.created);
+    }
+    for (const g of rv.giftcards) {
+      checkItem(g, ["code", "pin"], ["end_date"]);
+      if (g.end_date != null) checkDay(g.end_date);
+      checkImage(g, "image");
+      checkProfileIds(g);
+      if (g.initial != null) checkAmount(g.initial);
+      checkAmount(g.remaining);
+      if (!Array.isArray(g.history)) invalid();
+      for (const h of g.history) {
+        if (!isObj(h)) invalid();
+        onlyKeys(h, ["id", "date", "amount"]);
+        checkStr(h, "id", { required: true });
+        checkDay(h.date);
+        checkAmount(h.amount, true);
+      }
+    }
+    for (const t of rv.deleted) {
+      if (!isObj(t) || !KINDS.includes(t.kind)) invalid();
+      onlyKeys(t, ["kind", "id", "at"]);
+      checkStr(t, "id", { required: true });
+      checkTs(t.at);
+    }
+    for (const k of ["profiles", "accounts", "giftcards"]) {
+      const ids = rv[k].map((x) => x.id);
+      if (new Set(ids).size !== ids.length) invalid();
+    }
+  }
+
+  // Formes de vault.enc et de l'enveloppe du code : illisibles = coffre corrompu (jamais « mauvais code »).
+  const isBlob = (b) => isObj(b) && typeof b.iv === "string" && typeof b.ct === "string";
+  const isWrapped = (w) => isObj(w) && typeof w.salt === "string" && typeof w.iv === "string"
+    && typeof w.ct === "string" && Number.isInteger(w.iter) && w.iter > 0;
 
   class LocalApi {
     // `iterations` : réservé aux tests (PBKDF2 réduit) ; en production, la valeur du module crypto.
@@ -42,6 +163,7 @@
       this._loaded = null;
       this._dataKey = null; // présente seulement déverrouillé
       this._vault = null;
+      this._corrupt = false; // coffre local illisible : le téléphone se présente comme neuf au PC
     }
 
     // ------------------------------------------------------------ interne
@@ -76,18 +198,31 @@
       if (Number.isFinite(settings.autolock_minutes)) this._settings.autolock_minutes = settings.autolock_minutes;
       this._settings.biometric = settings.biometric === true;
       this._lockout = new PPM.Lockout(this._clock, (await n.getPref("pp.lockout")) || {});
-      this._keys = await this._readKeys();
-      this._hasData = !!(this._keys && this._keys.code && (await n.readFile(VAULT_FILE)) !== null);
+      // aucun des deux fichiers : téléphone neuf ; un seul, ou illisible (synchro interrompue, fichier
+      // abîmé) : coffre corrompu, réparé par la prochaine synchro
+      const keysRaw = await n.readFile(KEYS_FILE);
+      const vaultRaw = await n.readFile(VAULT_FILE);
+      this._keys = parseJson(keysRaw);
+      this._hasData = false;
+      if (keysRaw == null && vaultRaw == null) return;
+      if (isObj(this._keys) && typeof this._keys.code === "string" && isBlob(parseJson(vaultRaw))) {
+        this._hasData = true;
+      } else {
+        this._keys = null;
+        this._corrupt = true;
+      }
     }
 
-    async _readKeys() {
-      const raw = await this._native.readFile(KEYS_FILE);
-      if (raw == null) return null;
-      try {
-        const k = JSON.parse(raw);
-        return k && typeof k === "object" ? k : null;
-      } catch (e) {
-        return null;
+    // Coffre local inutilisable (clé du Keystore perdue, fichier abîmé) : rien n'est effacé ; la prochaine
+    // synchro (code du PC exigé) repart d'une nouvelle clé de données, comme un premier lancement.
+    async _markCorrupt() {
+      this._corrupt = true;
+      this._hasData = false;
+      this._dataKey = null;
+      this._vault = null;
+      if (this._settings.biometric) {
+        this._settings.biometric = false; // l'ancien blob d'empreinte enveloppait l'ancienne clé de données
+        await this._saveSettings();
       }
     }
 
@@ -140,14 +275,15 @@
 
     // Déchiffre le coffre avec la clé ; vrai si tout va bien.
     async _open(dataKey) {
-      const raw = await this._native.readFile(VAULT_FILE);
-      if (raw == null) return false;
+      const blob = parseJson(await this._native.readFile(VAULT_FILE));
+      if (!isBlob(blob)) return false;
       let v;
       try {
-        v = await C.decryptVault(dataKey, JSON.parse(raw));
+        v = await C.decryptVault(dataKey, blob);
       } catch (e) {
         return false;
       }
+      if (!isObj(v)) return false;
       this._dataKey = dataKey;
       this._vault = { ...V.empty(), ...v };
       return true;
@@ -185,7 +321,7 @@
           lock_mode: mode,
           pin_length: mode === "pin" ? this._meta.pin_length ?? null : null,
           has_data: this._hasData,
-          corrupt: false,
+          corrupt: this._corrupt,
           profiles: this._vault ? clone(this._vault.profiles) : [],
           biometric: this._bioOn(),
         };
@@ -196,14 +332,19 @@
       return this._run(async () => {
         const wait = this._lockout.waitSeconds();
         if (wait > 0) return { ok: false, wait_seconds: wait, error: "bad_code" };
-        if (!this._hasData) return { ok: false, wait_seconds: 0, error: "corrupt" };
+        const corrupt = { ok: false, wait_seconds: 0, error: "corrupt" };
+        if (!this._hasData) return corrupt;
         code = String(code ?? "");
-        let wrapped;
+        // couche Keystore et format des fichiers : indépendants du code saisi → « corrupt »
+        let wrapped = null;
         try {
-          wrapped = JSON.parse(dec.decode(await this._native.unwrap(ALIAS_CODE, this._keys.code)));
-        } catch (e) {
-          return { ok: false, wait_seconds: 0, error: "corrupt" }; // clé du Keystore perdue ou blob abîmé
+          wrapped = parseJson(dec.decode(await this._native.unwrap(ALIAS_CODE, this._keys.code)));
+        } catch (e) { /* clé du Keystore perdue ou blob abîmé */ }
+        if (!isWrapped(wrapped)) {
+          await this._markCorrupt();
+          return corrupt;
         }
+        // seule l'épreuve du code peut donner « bad_code » : un mauvais PIN n'efface jamais rien
         let dataKey;
         try {
           dataKey = await C.unwrapWithCode(wrapped, code);
@@ -212,7 +353,10 @@
           await this._persistLockout();
           return { ok: false, wait_seconds: this._lockout.waitSeconds(), error: "bad_code" };
         }
-        if (!(await this._open(dataKey))) return { ok: false, wait_seconds: 0, error: "corrupt" };
+        if (!(await this._open(dataKey))) {
+          await this._markCorrupt(); // bon code mais vault.enc illisible
+          return corrupt;
+        }
         this._lockout.success();
         await this._persistLockout();
         if (this._lockMode() === "pin" && /^\d+$/.test(code) && this._meta.pin_length !== code.length) {
@@ -237,8 +381,8 @@
           return { ok: false, error: "bio_invalidated" };
         }
         if (!(await this._open(new Uint8Array(dataKey)))) {
-          await this._dropBio();
-          return { ok: false, error: "bio_invalidated" };
+          await this._markCorrupt(); // clé obtenue mais vault.enc illisible
+          return { ok: false, error: "corrupt" };
         }
         this._lockout.success();
         await this._persistLockout();
@@ -363,9 +507,10 @@
       return this._run(async () => ({
         device_id: this._meta.device_id,
         device_name: String(await this._native.deviceName()),
-        generation: strOrNull(this._meta.generation),
-        last_sync: strOrNull(this._meta.last_sync),
-        code_version: strOrNull(this._meta.code_version),
+        // sans données utilisables (neuf ou corrompu) : présenté comme neuf, le PC exige le code et remplace
+        generation: this._hasData ? strOrNull(this._meta.generation) : null,
+        last_sync: this._hasData ? strOrNull(this._meta.last_sync) : null,
+        code_version: this._hasData ? strOrNull(this._meta.code_version) : null,
         has_data: this._hasData,
         now: V.nowIso(this._date()),
       }));
@@ -384,11 +529,10 @@
     // Ordre d'écriture : vault.enc → keys.json → pp.meta.
     apply_sync(resp, code = null) {
       return this._run(async () => {
-        const rv = resp && resp.vault;
-        if (!rv || typeof rv !== "object"
-          || !["profiles", "accounts", "giftcards", "deleted"].every((k) => Array.isArray(rv[k]))) {
-          throw new Error("Réponse de synchronisation invalide");
-        }
+        // tout est vérifié avant la moindre écriture
+        if (!isObj(resp) || resp.ok !== true) invalid();
+        const rv = resp.vault;
+        validateVault(rv);
         const hasCode = typeof code === "string" && code !== "";
         let dataKey = this._dataKey;
         let newKey = false;
@@ -408,6 +552,7 @@
         this._dataKey = dataKey;
         this._vault = clone(vault);
         this._hasData = true;
+        this._corrupt = false;
 
         // 2. clés : nouveau code (ou nouvelle clé) ; l'empreinte n'est refaite que si la clé change
         if (hasCode) {

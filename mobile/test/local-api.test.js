@@ -304,3 +304,116 @@ test("nativeFake : wrap réversible mais pas identité ; deleteKey rend l'ancien
   n.setNextQr("pp://x");
   assert.equal(await n.scanQr(), "pp://x");
 });
+
+// ---------------------------------------------------------------- correctifs de revue (tour 1)
+test("apply_sync refuse ok:false et les éléments invalides sans rien écrire", async () => {
+  const { api, native } = await synced();
+  const before = await native.readFile("vault.enc");
+  const keysBefore = await native.readFile("keys.json");
+  const metaBefore = await native.getPref("pp.meta");
+  const bad = [
+    pcResp({ ok: false }),
+    (() => { const r = pcResp(); delete r.ok; return r; })(),
+    (() => { const r = pcResp(); r.vault.accounts = [null, 42, { foo: 1 }]; return r; })(),
+    (() => { const r = pcResp(); r.vault.accounts[0].updated = "hier"; return r; })(),
+    (() => { const r = pcResp(); r.vault.accounts[0].profiles = "p1"; return r; })(),
+    (() => { const r = pcResp(); r.vault.accounts.push({ ...r.vault.accounts[0] }); return r; })(),
+    (() => { const r = pcResp(); r.vault.giftcards[0].remaining = -1; return r; })(),
+    (() => { const r = pcResp(); r.vault.giftcards[0].history = [{ id: "h", date: "2026-02-30", amount: 1 }]; return r; })(),
+    (() => { const r = pcResp(); r.vault.deleted = [{ kind: "account", id: "x", at: T0, extra: 1 }]; return r; })(),
+    (() => { const r = pcResp(); r.vault.deleted = [{ kind: "chose", id: "x", at: T0 }]; return r; })(),
+    (() => { const r = pcResp(); r.vault.profiles[0].avatar = "http://x"; return r; })(),
+  ];
+  for (const r of bad) {
+    await assert.rejects(api.apply_sync(r, "5678"), /Réponse de synchronisation invalide/);
+  }
+  assert.equal(await native.readFile("vault.enc"), before);
+  assert.equal(await native.readFile("keys.json"), keysBefore);
+  assert.deepEqual(await native.getPref("pp.meta"), metaBefore);
+  assert.equal((await api.list_accounts(null))[0].password, SECRET);
+});
+
+test("clé du Keystore perdue → état corrompu → resynchro avec le code → unlock avec ce code", async () => {
+  const { api, native, store, clk } = await synced();
+  await api.save_settings({ biometric: true });
+  await api.lock();
+  await native.deleteKey("pp-device");
+  assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 0, error: "corrupt" });
+  const s = await api.get_state();
+  assert.equal(s.corrupt, true);
+  assert.equal(s.locked, false);
+  assert.equal(s.has_data, false);
+  assert.equal(s.lock_mode, "none");
+  assert.equal(s.biometric, false);
+  const info = await api.sync_info();
+  assert.equal(info.has_data, false);
+  assert.equal(info.code_version, null);
+  assert.equal(info.generation, null);
+  assert.equal(info.last_sync, null);
+  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], deleted: [] });
+  await assert.rejects(api.apply_sync(pcResp(), null), /code/i);
+  // le PC exige le code et remplace
+  await api.apply_sync(pcResp({ synced_at: "2026-10-19T12:00:00" }), "4321");
+  const s2 = await api.get_state();
+  assert.equal(s2.corrupt, false);
+  assert.equal(s2.has_data, true);
+  assert.equal(s2.locked, false);
+  await api.lock();
+  assert.equal((await api.unlock("1234")).error, "bad_code");
+  clk.now += 1000;
+  assert.equal((await api.unlock("4321")).ok, true);
+  assert.equal((await api.list_accounts(null))[0].password, SECRET);
+  // et après un redémarrage
+  const api2 = new LocalApi({ native: nativeFake.create({ store }), clock: () => clk.now, iterations: ITER });
+  assert.equal((await api2.get_state()).corrupt, false);
+  assert.equal((await api2.unlock("4321")).ok, true);
+});
+
+test("un mauvais code reste « bad_code », jamais « corrupt » ; vault.enc abîmé → corrupt avec le bon code", async () => {
+  const { api, native, clk } = await synced();
+  await api.lock();
+  const vaultBefore = await native.readFile("vault.enc");
+  for (const code of ["0000", "9999", "", "abc"]) {
+    clk.now += 400000;
+    const r = await api.unlock(code);
+    assert.equal(r.error, "bad_code");
+    assert.equal((await api.get_state()).corrupt, false);
+  }
+  assert.equal(await native.readFile("vault.enc"), vaultBefore);
+  // vault.enc abîmé : un mauvais code reste un mauvais code…
+  const blob = JSON.parse(vaultBefore);
+  blob.ct = blob.ct.slice(0, -4) + (blob.ct.endsWith("AAAA") ? "BBBB" : "AAAA");
+  await native.writeFileAtomic("vault.enc", JSON.stringify(blob));
+  clk.now += 400000;
+  assert.equal((await api.unlock("0000")).error, "bad_code");
+  assert.equal((await api.get_state()).corrupt, false);
+  // … le bon code révèle la corruption
+  clk.now += 400000;
+  assert.deepEqual(await api.unlock("1234"), { ok: false, wait_seconds: 0, error: "corrupt" });
+  assert.equal((await api.get_state()).corrupt, true);
+});
+
+test("fichiers incomplets ou illisibles au démarrage → corrompu ; aucun fichier → neuf", async () => {
+  for (const [keys, vault] of [[null, "{}"], ["{}", null], ["pas du json", "{}"], ['{"code":"x"}', "pas du json"]]) {
+    const store = nativeFake.memoryStore();
+    const n = nativeFake.create({ store });
+    if (keys !== null) await n.writeFileAtomic("keys.json", keys);
+    if (vault !== null) await n.writeFileAtomic("vault.enc", vault);
+    const api = new LocalApi({ native: n, clock: () => 0, iterations: ITER });
+    const s = await api.get_state();
+    assert.deepEqual([s.corrupt, s.locked, s.has_data], [true, false, false], `${keys} / ${vault}`);
+    await api.apply_sync(pcResp(), "1234");
+    assert.equal((await api.get_state()).corrupt, false);
+  }
+  const fresh = setup().api;
+  assert.equal((await fresh.get_state()).corrupt, false);
+});
+
+test("empreinte : vault.enc illisible → corrupt", async () => {
+  const { api, native } = await synced();
+  await api.save_settings({ biometric: true });
+  await api.lock();
+  await native.writeFileAtomic("vault.enc", JSON.stringify({ v: 1, iv: "AAAA", ct: "AAAA" }));
+  assert.deepEqual(await api.unlock_biometric(), { ok: false, error: "corrupt" });
+  assert.equal((await api.get_state()).corrupt, true);
+});
