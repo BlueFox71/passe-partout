@@ -8,6 +8,8 @@
     const modeLabel = { none: "Aucun", pin: "Code PIN", password: "Mot de passe", unknown: "Code" };
     const missing = await missingLogos();
     const devices = await PP.call("list_devices");
+    let info = { version: "" };
+    try { info = await PP.api.get_app_info(); } catch (e) {}
     container.innerHTML = `
       <div class="settings">
         <h2>Réglages</h2>
@@ -68,6 +70,7 @@
             <button class="btn btn-ghost" data-b="${PP.esc(b.name)}" style="padding:6px 12px">Restaurer</button></div>`).join("")
             : `<div class="hint">Aucune sauvegarde pour l'instant.</div>`}
         </div>
+        ${info.version ? `<div class="app-version">Passe-Partout ${PP.esc(info.version)}</div>` : ""}
       </div>`;
 
     const $ = (s) => container.querySelector(s);

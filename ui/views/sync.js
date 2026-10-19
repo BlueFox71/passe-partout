@@ -46,6 +46,8 @@
         <div class="sync-count" id="sy-count"></div>
         <div class="sync-state" id="sy-state"></div>
         <div class="sync-err" id="sy-err"></div>
+        <div class="sync-notice" id="sy-notice"></div>
+        <a href="#" class="sync-link" id="sy-install" style="display:none">Installer l'appli sur le téléphone</a>
         <div class="hint">Si Windows le demande, autorise Passe-Partout sur les réseaux privés.</div>
       </div>
       <div class="modal-foot"><button class="btn btn-primary" id="sy-retry" style="display:none">Relancer</button>
@@ -60,6 +62,15 @@
     const $ = (s) => m.querySelector(s);
     $("#sy-close").addEventListener("click", () => PP.modal.close());
     $("#sy-retry").addEventListener("click", () => V.open());
+    $("#sy-install").addEventListener("click", (ev) => {
+      ev.preventDefault();
+      PP.modal.close(); // arrête la synchro (sync_stop) avant d'ouvrir l'autre fenêtre
+      PP.views.apkinstall.open();
+    });
+    // Aucun téléphone encore synchronisé : propose d'installer l'appli.
+    Promise.resolve().then(() => PP.api.list_devices()).then((l) => {
+      if (my === token && Array.isArray(l) && !l.length) $("#sy-install").style.display = "";
+    }).catch(() => {});
 
     const set = (cls, text) => { const el = $("#sy-state"); el.className = "sync-state " + cls; el.textContent = text; };
     let refreshed = false;
@@ -74,6 +85,7 @@
       if (my !== token) return;
       if (!st) { timer = setTimeout(tick, 500); return; }
       const count = $("#sy-count");
+      $("#sy-notice").textContent = st.notice || "";
       $("#sy-err").textContent = st.state === "syncing" || st.state === "waiting" ? st.error || "" : "";
       if (st.state === "waiting" || st.state === "syncing") {
         count.textContent = mmss(st.seconds_left || 0);
@@ -111,9 +123,12 @@
             <div class="hint">dernière synchro le ${PP.esc(when(d.last_sync))}</div></div>
             <button class="btn btn-ghost" data-fd="${PP.esc(d.id)}" style="padding:6px 12px">Oublier</button></div>`).join("")
             : `<div class="hint">Aucun téléphone synchronisé</div>`}
+          <div style="margin-top:12px"><button class="btn btn-ghost" id="apk-install">${PP.icon.phone.replace("<svg", '<svg style="width:16px"')} Installer l'appli sur le téléphone</button></div>
         </div>`;
 
   V.bindCard = (container, devices, rerender) => {
+    const inst = container.querySelector("#apk-install");
+    if (inst) inst.addEventListener("click", () => PP.views.apkinstall.open());
     container.querySelectorAll("[data-fd]").forEach((b) => b.addEventListener("click", async () => {
       const d = devices.find((x) => x.id === b.dataset.fd);
       if (!d) return;

@@ -82,6 +82,7 @@ class _ApkRun:
         self.server = server
         self.deadline = deadline
         self.stopped = False
+        self.urls: list[str] = []
 
 
 class Api:
@@ -736,8 +737,17 @@ class Api:
             self._stop_apk(old)
         self._schedule(APK_SECONDS + 0.2, lambda: self._apk_timeout(run))
         urls = [f"http://{h}:{server.port}/{token}/{info['filename']}" for h in hosts]
+        run.urls = urls
         return {"qr": qr_svg(urls[0]), "url": urls[0], "urls": urls, "seconds": APK_SECONDS,
                 "version": info["version"]}
+
+    def apk_qr(self, url: str) -> str:
+        with self._mutex:
+            run = self._apk
+            known = run is not None and url in run.urls
+        if not known:
+            raise ValueError("Adresse inconnue : relance l'installation.")
+        return qr_svg(url)
 
     @staticmethod
     def _stop_apk(run: _ApkRun) -> None:

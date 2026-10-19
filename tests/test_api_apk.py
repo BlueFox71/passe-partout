@@ -134,3 +134,17 @@ def test_real_server_end_to_end(tmp_path, fake_clip, clock, dialogs, monkeypatch
     assert urllib.request.urlopen(local, timeout=5).read() == b"APKDATA"
     assert e.api.apk_install_status()["state"] == "done"
     e.api.apk_install_stop()
+
+
+def test_apk_qr_only_for_session_urls(tmp_path, fake_clip, clock, dialogs, monkeypatch):
+    e = Env(tmp_path, fake_clip, clock, dialogs, monkeypatch, hosts=("192.168.1.20", "10.0.0.5"))
+    with pytest.raises(ValueError):
+        e.api.apk_qr("http://192.168.1.20:50200/x/y.apk")  # aucune session
+    r = e.api.apk_install_start()
+    assert len(r["urls"]) == 2
+    assert e.api.apk_qr(r["urls"][1]) == "<svg>qr</svg>" and e.qr[-1] == r["urls"][1]
+    with pytest.raises(ValueError):
+        e.api.apk_qr("http://evil.example/x")
+    e.api.apk_install_stop()
+    with pytest.raises(ValueError):
+        e.api.apk_qr(r["urls"][1])
