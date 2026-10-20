@@ -26,7 +26,7 @@ def test_compare_versions_invalide():
 
 def test_version_file_matches_constant():
     racine = Path(__file__).resolve().parent.parent
-    assert VERSION == (racine / "VERSION").read_text(encoding="utf-8").strip() == "1.0.1"
+    assert VERSION == (racine / "VERSION").read_text(encoding="utf-8").strip() == "1.1.0"
 
 
 def test_lecture_version_ignore_le_bom(tmp_path):
