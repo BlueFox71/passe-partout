@@ -5,7 +5,9 @@ Les attributs privés (préfixe _) ne sont pas exposés au JS.
 """
 from __future__ import annotations
 
+import base64
 import functools
+import io
 import json
 import math
 import os
@@ -23,7 +25,9 @@ from pathlib import Path
 from app import apk as apk_mod
 from app import bankcards as bc_logic
 from app import giftcards as gc_logic
+from app import recovery
 from app.apkserve import APK_SECONDS, ApkServer
+from app.chromecsv import read_chrome_csv
 from app.crypto import CryptoError
 from app.exporter import export_png, export_text
 from app.images import normalize_image as _normalize_image
@@ -57,6 +61,14 @@ def _locked(fn):
         with self._mutex:
             return fn(self, *args, **kwargs)
     return wrapper
+
+
+def _grab_clipboard():
+    from PIL import ImageGrab
+    try:
+        return ImageGrab.grabclipboard()
+    except OSError:
+        return None
 
 
 def _timer(seconds, fn):
@@ -109,6 +121,8 @@ class Api:
         self._lockout = Lockout(wall_clock)
         self._lockout.restore(self._config.get("lockout") or {})
         self._corrupt = False
+        self._grab_clipboard = _grab_clipboard
+        self._chrome_csv: Path | None = None  # dernier export Chrome lu, à proposer de supprimer
         self._converted = 0  # comptes convertis en cartes bancaires, annoncés une fois par get_state
         if store.exists() and not store.is_encrypted():
             try:
@@ -183,7 +197,7 @@ class Api:
         converted, self._converted = (self._converted, 0) if self._store.vault else (0, self._converted)
         return {"locked": locked, "lock_mode": mode, "pin_length": pin_length,
                 "has_data": has_data, "corrupt": self._corrupt, "profiles": profiles,
-                "converted_cards": converted}
+                "converted_cards": converted, "recovery": mode != "none" and self._has_recovery()}
 
     @_locked
     def unlock(self, code: str) -> dict:
@@ -206,6 +220,55 @@ class Api:
             self._config["pin_length"] = len(str(code))
         self._persist_lockout()
         return {"ok": True, "wait_seconds": 0}
+
+    # ---------------------------------------------------------------- questions de sécurité
+    def _has_recovery(self) -> bool:
+        return recovery.is_valid(self._config.get("recovery"))
+
+    @_locked
+    def get_recovery(self) -> dict:
+        """Liste des questions, et celles choisies (affichées à l'écran de verrouillage)."""
+        rec = self._config.get("recovery")
+        chosen = rec["questions"] if self._lock_mode() != "none" and recovery.is_valid(rec) else None
+        return {"questions": recovery.QUESTIONS, "chosen": chosen}
+
+    @_locked
+    def set_recovery(self, questions: list[int], answers: list[str], code: str) -> dict:
+        """Enregistre les questions ; le code actuel est redemandé (il est chiffré avec les réponses)."""
+        self._vault()
+        if self._lock_mode() == "none":
+            raise ValueError("Choisis d'abord un code PIN ou un mot de passe")
+        if not self._store.verify_code(str(code or "")):
+            raise ValueError("Code actuel incorrect")
+        self._config["recovery"] = recovery.create([int(q) for q in questions], [str(a or "") for a in answers],
+                                                   str(code), self._store.seal)
+        self._write_config()
+        return {}
+
+    @_locked
+    def clear_recovery(self) -> dict:
+        self._vault()
+        self._config.pop("recovery", None)
+        self._write_config()
+        return {}
+
+    @_locked
+    def recover(self, answers: list[str]) -> dict:
+        """Ouvre le coffre avec les réponses ; l'interface fait ensuite choisir un nouveau code."""
+        wait = self._lockout.wait_seconds()
+        if wait > 0:
+            return {"ok": False, "wait_seconds": wait, "error": "bad_answers"}
+        rec = self._config.get("recovery")
+        if self._lock_mode() == "none" or not recovery.is_valid(rec):
+            return {"ok": False, "wait_seconds": 0, "error": "no_recovery"}
+        try:
+            code = recovery.recover(rec, [str(a or "") for a in answers])
+        except CryptoError:
+            self._lockout.fail()
+            self._persist_lockout()
+            return {"ok": False, "wait_seconds": self._lockout.wait_seconds(), "error": "bad_answers"}
+        r = self.unlock(code)
+        return r if r["ok"] else {**r, "error": r.get("error") or "bad_answers"}
 
     def _persist_lockout(self) -> None:
         self._config["lockout"] = self._lockout.to_dict()
@@ -239,7 +302,18 @@ class Api:
             raise ValueError("Le PIN doit contenir de 4 à 12 chiffres")
         if mode == "password" and not (code and len(code) >= 6):
             raise ValueError("Le mot de passe doit faire au moins 6 caractères")
+        # questions de sécurité : la clé R est relue avec l'ancienne clé, puis rechiffrée avec la nouvelle
+        rec, r = self._config.get("recovery"), None
+        if mode != "none" and recovery.is_valid(rec):
+            try:
+                r = self._store.unseal(base64.b64decode(rec["by_key"]))
+            except (CryptoError, PermissionError, ValueError):
+                r = None
         self._store.set_lock(code if mode != "none" else None)
+        if r is None:
+            self._config.pop("recovery", None)
+        else:
+            self._config["recovery"] = recovery.rekey(rec, lambda _blob: r, self._store.seal, code)
         self._config["lock_mode"] = mode
         if mode == "pin":
             self._config["pin_length"] = len(code)
@@ -359,11 +433,12 @@ class Api:
         valid = self._profile_ids()
         add = [p for p in changes.get("add_profiles") or [] if p in valid]
         remove = set(changes.get("remove_profiles") or [])
+        set_category = "category" in changes  # une catégorie vide retire la catégorie
         category = self._category_label(str(changes.get("category") or ""))
         for a in v.accounts:
             if a.id not in ids:
                 continue
-            if category:
+            if set_category:
                 a.category = category
             profiles = list(dict.fromkeys([*a.profiles, *add]))
             kept = [p for p in profiles if p not in remove]
@@ -371,6 +446,30 @@ class Api:
             a.updated = now_iso()
         self._save()
         return {}
+
+    @_locked
+    def rename_category(self, old: str, new: str) -> dict:
+        """Renomme une catégorie sur tous les comptes (tous profils) ; un nom existant fusionne les deux."""
+        v = self._vault()
+        key = normalize(old)
+        name = re.sub(r"\s+", " ", str(new or "")).strip()
+        if not key:
+            raise ValueError("Catégorie introuvable")
+        if not name:
+            raise ValueError("Le nom de la catégorie est obligatoire")
+        # fusion : le libellé déjà employé par l'autre catégorie est repris tel quel
+        other = next((a.category for a in v.accounts if a.category and normalize(a.category) == normalize(name)
+                      and normalize(a.category) != key), None)
+        name = other or name
+        n = 0
+        for a in v.accounts:
+            if a.category and normalize(a.category) == key and a.category != name:
+                a.category = name
+                a.updated = now_iso()
+                n += 1
+        if n:
+            self._save()
+        return {"renamed": n, "name": name, "merged": other is not None}
 
     # ---------------------------------------------------------------- cartes cadeaux
     @_locked
@@ -600,6 +699,22 @@ class Api:
     def normalize_image(self, data_url: str) -> str:
         return _normalize_image(data_url)
 
+    def paste_image(self) -> str | None:
+        """Image du presse-papiers Windows (capture, image copiée ou fichier image copié), ou None."""
+        data = self._grab_clipboard()
+        if data is None:
+            return None
+        if isinstance(data, list):  # fichiers copiés dans l'Explorateur : le premier lisible
+            for f in data:
+                try:
+                    return _normalize_image(Path(f).read_bytes())
+                except (OSError, ValueError):
+                    continue
+            return None
+        out = io.BytesIO()
+        data.save(out, "PNG")
+        return _normalize_image(out.getvalue())
+
     # ---------------------------------------------------------------- import / premier lancement
     def _ensure_vault(self, profile_name: str) -> str:
         """Crée le coffre si besoin et renvoie l'id du profil de ce nom (créé s'il n'existe pas)."""
@@ -652,6 +767,71 @@ class Api:
                 self._store.vault = original
                 raise ValueError("Impossible de lire ce fichier Excel") from e
             return {"added": added, "skipped": skipped}
+
+    def preview_chrome_import(self, path: str | None) -> dict | None:
+        """Lit l'export CSV de Chrome : {path, rows: [{name, login, password}], uptodate} pour la fenêtre de revue."""
+        with self._mutex:
+            self._vault()
+        path = path or self._ask_file("csv")
+        if not path:
+            return None
+        with self._mutex:
+            try:
+                r = read_chrome_csv(Path(path), self._vault())
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError("Impossible de lire ce fichier CSV") from e
+            self._chrome_csv = Path(path)
+            return {"path": str(path), **r}
+
+    @_locked
+    def import_chrome(self, rows: list[dict]) -> dict:
+        """Ajoute les comptes revus ; « replace » (id d'un compte existant) ne change que son mot de passe
+        (et son image si la ligne en a une).
+
+        Tout est vérifié avant d'appliquer : une ligne invalide n'enregistre rien.
+        """
+        v = self._vault()
+        by_id = {a.id: a for a in v.accounts}
+        todo = []
+        for r in rows or []:
+            name = str(r.get("name") or "").strip()
+            if not name:
+                raise ValueError("Chaque compte doit avoir un nom")
+            target = by_id.get(r.get("replace")) if r.get("replace") else None
+            if r.get("replace") and target is None:
+                raise ValueError(f"Compte à mettre à jour introuvable : {name}")
+            profiles = None if target else self._check_profiles([r.get("profile")])
+            todo.append((r, name, target, profiles))
+        added = updated = 0
+        for r, name, target, profiles in todo:
+            image = r.get("image") if str(r.get("image") or "").startswith("data:image/png;base64,") else None
+            if target:
+                target.password = str(r.get("password") or "")
+                if image:
+                    target.image = image
+                target.updated = now_iso()
+                updated += 1
+                continue
+            v.accounts.append(Account(
+                id=new_id(), name=name, category=self._category_label(str(r.get("category") or "")),
+                login=str(r.get("login") or "").strip(), password=str(r.get("password") or ""), image=image,
+                profiles=profiles,
+            ))
+            added += 1
+        if added or updated:
+            self._save()
+        return {"added": added, "updated": updated}
+
+    @_locked
+    def delete_chrome_csv(self) -> bool:
+        """Supprime le dernier export Chrome lu (il contient les mots de passe en clair)."""
+        path, self._chrome_csv = self._chrome_csv, None
+        if path is None or not path.exists():
+            return False
+        path.unlink()
+        return True
 
     @_locked
     def set_images(self, accounts: dict, giftcards: dict) -> int:

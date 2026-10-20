@@ -148,7 +148,7 @@
 
   V.defaultProfiles = () => new Set([S.profileId ?? S.profiles[0].id]);
 
-  // `back(id)` : rouvre ce d'où l'on vient (la fiche en fenêtre) après « Enregistrer » ou « Annuler ».
+  // `back(id)` : rouvre ce d'où l'on vient (la fiche en fenêtre) après « Annuler ».
   V.openAccount = (account, presetCategory = "", { back = null } = {}) => {
     const a = account
       ? { ...account }
@@ -162,8 +162,7 @@
       <div class="grid2">
         <div class="field"><label>Nom</label><div><input class="input" id="f-name" value="${PP.esc(a.name)}" placeholder="Ex. Netflix, Amazon, Impôts…"></div>
           <div class="logo-hint" id="f-hint"></div></div>
-        <div class="field"><label>Catégorie</label><input class="input" id="f-cat" list="f-cats" value="${PP.esc(a.category)}" placeholder="Ex. Banque">
-          <datalist id="f-cats">${cats.map((c) => `<option value="${PP.esc(c)}">`).join("")}</datalist></div>
+        <div class="field"><label>Catégorie</label>${PP.catPicker.html(a.category, 'id="f-cat"')}</div>
         <div class="field"><label>Identifiant</label><input class="input" id="f-login" value="${PP.esc(a.login)}" placeholder="Adresse mail, numéro…" spellcheck="false"></div>
         <div class="field"><label>Format de l'identifiant <span style="text-transform:none;letter-spacing:0">(facultatif)</span></label>
           <input class="input" id="f-lmask" value="${PP.esc(a.login_mask || "")}" placeholder="Ex. ## ## ### ### ###" spellcheck="false">
@@ -211,6 +210,8 @@
     logo = V.autoLogo($("#f-name"), a, zone, $("#f-hint"));
     V.profileChecks($("#f-profs"), profs);
     $("#f-fav").addEventListener("click", (e) => { e.preventDefault(); a.favorite = !a.favorite; $("#f-fav").classList.toggle("on", a.favorite); });
+    $("#f-cat").addEventListener("click", () =>
+      PP.catPicker.open($("#f-cat"), a.category, cats, (c) => { a.category = c; PP.catPicker.set($("#f-cat"), c); }));
     $("#f-cancel").addEventListener("click", () => (back ? back(account.id) : PP.modal.close()));
     $("#f-name").focus();
 
@@ -218,7 +219,7 @@
       const rec = {
         ...a,
         name: $("#f-name").value.trim(),
-        category: $("#f-cat").value.trim(),
+        category: (a.category || "").trim(),
         login: $("#f-login").value.trim(),
         password: $("#f-pw").value,
         login_mask: $("#f-lmask").value.trim() || null,
@@ -234,8 +235,7 @@
         PP.toast("Ce compte n'appartient pas au profil affiché");
       }
       PP.views.main.select(saved.id);
-      await PP.views.main.afterChange();
-      if (back) back(saved.id);
+      await PP.views.main.afterChange(); // retour direct à la liste, sans rouvrir la fiche
     };
     $("#f-save").addEventListener("click", save);
     m.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.ctrlKey) save(); });

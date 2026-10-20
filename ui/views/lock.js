@@ -36,11 +36,14 @@
           ${isPin && !Number(s.pin_length) ? `<div class="hint" style="text-align:center">Valide avec ✓ cette fois-ci :<br>ensuite, le code se validera tout seul.</div>` : ""}
           ${s.mock ? `<div class="hint">Maquette : le code est 123456</div>` : ""}
         </div>
+        ${s.recovery ? `<a href="#" id="forgot-link" class="hint" style="color:var(--cyan)">Code oublié ? Répondre aux questions de sécurité</a>` : ""}
         <a href="#" id="restore-link" class="hint" style="color:var(--faint)">Problème d'accès ? Restaurer une sauvegarde</a>
       </div>`);
 
     const err = app.querySelector("#err");
     app.querySelector("#restore-link").addEventListener("click", (e) => { e.preventDefault(); V.showCorrupt(true); });
+    const forgot = app.querySelector("#forgot-link");
+    if (forgot) forgot.addEventListener("click", (e) => { e.preventDefault(); press = null; PP.views.recovery.forgot(); });
     const card = app.querySelector(".lock-card");
 
     let busy = false;

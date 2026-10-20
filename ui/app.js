@@ -238,6 +238,7 @@
   PP.icon = {
     search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
     copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
+    paste: svg('<rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/>'),
     eye: svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
     eyeOff: svg('<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.6 0 3-.4 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'),
     edit: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/>'),
@@ -355,6 +356,7 @@
       return ov.firstElementChild;
     },
     close() {
+      PP.catPicker.close();
       const root = document.getElementById("modal-root");
       if (!root.firstElementChild) return;
       root.innerHTML = "";
@@ -365,12 +367,12 @@
     isOpen: () => !!document.getElementById("modal-root").firstElementChild,
   };
 
-  PP.confirm = (title, text, { ok = "Confirmer", danger = false } = {}) =>
+  PP.confirm = (title, text, { ok = "Confirmer", cancel = "Annuler", danger = false } = {}) =>
     new Promise((resolve) => {
       let done = false;
       const m = PP.modal.open(
         `<h2>${PP.esc(title)}</h2><p style="color:var(--muted);margin:0">${PP.esc(text)}</p>
-         <div class="modal-foot"><button class="btn btn-ghost" data-r="0">Annuler</button>
+         <div class="modal-foot"><button class="btn btn-ghost" data-r="0">${PP.esc(cancel)}</button>
          <button class="btn ${danger ? "btn-danger" : "btn-primary"}" data-r="1">${PP.esc(ok)}</button></div>`,
         { cls: "sm", onClose: () => { if (!done) resolve(false); } }
       );
@@ -378,6 +380,68 @@
         b.addEventListener("click", () => { done = true; PP.modal.close(); resolve(b.dataset.r === "1"); })
       );
     });
+
+  /* ---------- choix de catégorie : grille des catégories existantes, saisie pour filtrer ou en créer une ----------
+     PP.catPicker.html(valeur, attrs) donne le bouton ; PP.catPicker.open(bouton, valeur, catégories, onPick) ouvre la grille. */
+  PP.catPicker = {
+    html: (value, attrs = "") => `<button type="button" class="input cat-pick ${value ? "" : "is-empty"}" ${attrs}>
+      <span>${PP.esc(value || "Choisir…")}</span>${PP.icon.next}</button>`,
+    set(btn, value) {
+      btn.classList.toggle("is-empty", !value);
+      btn.querySelector("span").textContent = value || "Choisir…";
+    },
+    open(anchor, value, cats, onPick) {
+      PP.catPicker.close();
+      const pop = document.createElement("div");
+      pop.className = "cat-pop";
+      pop.innerHTML = `<input class="input" placeholder="Filtrer ou créer une catégorie…" spellcheck="false"><div class="cat-grid"></div>`;
+      document.body.appendChild(pop);
+      const input = pop.querySelector("input");
+      const grid = pop.querySelector(".cat-grid");
+      const list = [...new Map(cats.filter(Boolean).map((c) => [PP.normalize(c), c])).values()]
+        .sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
+      const choose = (c) => { PP.catPicker.close(); onPick(c); };
+      const draw = () => {
+        const q = PP.normalize(input.value);
+        const shown = list.filter((c) => PP.normalize(c).includes(q));
+        const exact = list.some((c) => PP.normalize(c) === q);
+        grid.innerHTML = shown.map((c) => `<button type="button" class="cat-chip ${PP.normalize(c) === PP.normalize(value) ? "on" : ""}" data-c="${PP.esc(c)}" title="${PP.esc(c)}">${PP.esc(c)}</button>`).join("")
+          + (q && !exact ? `<button type="button" class="cat-chip new" data-c="${PP.esc(input.value.trim())}">${PP.icon.plus} Créer « ${PP.esc(input.value.trim())} »</button>` : "")
+          + (!shown.length && !q ? `<div class="hint">Aucune catégorie pour l'instant : tape un nom.</div>` : "")
+          + `<button type="button" class="cat-chip none" data-c="">Sans catégorie</button>`;
+      };
+      grid.addEventListener("mousedown", (e) => e.preventDefault()); // garde le focus dans la saisie
+      grid.addEventListener("click", (e) => { const b = e.target.closest("[data-c]"); if (b) choose(b.dataset.c); });
+      input.addEventListener("input", draw);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.stopPropagation(); PP.catPicker.close(); anchor.focus(); }
+        if (e.key === "Enter") {
+          e.preventDefault(); e.stopPropagation();
+          const q = PP.normalize(input.value);
+          if (!q) return;
+          // catégorie existante à la casse près, sinon la seule qui correspond au filtre, sinon nouvelle
+          const shown = list.filter((c) => PP.normalize(c).includes(q));
+          choose(list.find((c) => PP.normalize(c) === q) || (shown.length === 1 ? shown[0] : input.value.trim()));
+        }
+      });
+      draw();
+      // Position fixe sous le bouton (au-dessus s'il n'y a pas la place) : la grille sort des modales qui défilent.
+      const r = anchor.getBoundingClientRect();
+      pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+      pop.style.top = r.bottom + 6 + pop.offsetHeight < window.innerHeight ? `${r.bottom + 6}px` : `${Math.max(8, r.top - 6 - pop.offsetHeight)}px`;
+      input.focus();
+      const away = (e) => { if (!pop.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) PP.catPicker.close(); };
+      const scrolled = (e) => { if (!pop.contains(e.target)) PP.catPicker.close(); };
+      setTimeout(() => document.addEventListener("mousedown", away, true));
+      document.addEventListener("scroll", scrolled, true);
+      PP.catPicker._cleanup = () => { document.removeEventListener("mousedown", away, true); document.removeEventListener("scroll", scrolled, true); pop.remove(); };
+    },
+    close() {
+      const c = PP.catPicker._cleanup;
+      PP.catPicker._cleanup = null;
+      if (c) c();
+    },
+  };
 
   /* ---------- presse-papiers ---------- */
   PP.copySecret = async (text, what = "Mot de passe") => {

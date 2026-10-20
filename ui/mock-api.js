@@ -90,6 +90,7 @@
   }
   let settings = { autolock_minutes: 10 };
   let lock = { mode: params.has("sansverrou") ? "none" : "pin", code: "123456" };
+  let recov = { q: [0, 3, 4], a: ["medor", "zelda", "gameboy"] }; // questions de sécurité (maquette)
   let hasData = !params.has("bienvenue");
   if (!hasData) lock = { mode: "none", code: null };
   let locked = lock.mode !== "none";
@@ -134,7 +135,7 @@
     async get_state() {
       const conv = locked ? 0 : converted;
       if (!locked) converted = 0;
-      return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true, converted_cards: conv };
+      return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true, converted_cards: conv, recovery: lock.mode !== "none" && !!recov };
     },
     async unlock(code) {
       await new Promise((r) => setTimeout(r, 400)); // comme la vraie dérivation de clé
@@ -161,10 +162,18 @@
       return clone(rec);
     },
     async delete_account(id) { need(); accounts.splice(accounts.findIndex((x) => x.id === id), 1); return {}; },
+    async rename_category(old, name) {
+      need();
+      const other = accounts.find((a) => a.category && PP.normalize(a.category) === PP.normalize(name) && PP.normalize(a.category) !== PP.normalize(old));
+      name = other ? other.category : name;
+      let n = 0;
+      for (const a of accounts) if (a.category && PP.normalize(a.category) === PP.normalize(old)) { a.category = name; n++; }
+      return { renamed: n, name, merged: !!other };
+    },
     async bulk_update(ids, ch) {
       need();
       for (const a of accounts.filter((x) => ids.includes(x.id))) {
-        if (ch.category) a.category = ch.category;
+        if ("category" in ch) a.category = ch.category;
         for (const p of ch.add_profiles || []) if (!a.profiles.includes(p)) a.profiles.push(p);
         const rest = a.profiles.filter((p) => !(ch.remove_profiles || []).includes(p));
         if (rest.length) a.profiles = rest;
@@ -265,7 +274,22 @@
     },
     async normalize_image(dataUrl) { return resizeDataUrl(dataUrl); },
 
-    async set_lock(mode, code) { lock = { mode, code }; return {}; },
+    async set_lock(mode, code) { lock = { mode, code }; if (mode === "none") recov = null; return {}; },
+    async get_recovery() {
+      return { chosen: lock.mode !== "none" && recov ? recov.q : null, questions: [
+        "Quel était le nom de ton premier animal de compagnie ?", "Quel est le prénom de ton meilleur ami d'enfance ?",
+        "Dans quelle rue habitais-tu à 10 ans ?", "Quel est ton jeu vidéo préféré ?", "Quelle a été ta première console de jeux vidéo ?"] };
+    },
+    async set_recovery(q, a, code) {
+      if (code !== lock.code) throw new Error("Code actuel incorrect");
+      recov = { q, a: a.map((x) => PP.normalize(x).replace(/[^a-z0-9]/g, "")) }; return {};
+    },
+    async clear_recovery() { recov = null; return {}; },
+    async recover(a) {
+      const ok = recov && a.every((x, i) => PP.normalize(x).replace(/[^a-z0-9]/g, "") === recov.a[i]);
+      if (!ok) return { ok: false, wait_seconds: 1, error: "bad_answers" };
+      locked = false; return { ok: true, wait_seconds: 0 };
+    },
     async get_settings() { return clone(settings); },
     async save_settings(s) { settings = { ...settings, ...s }; return clone(settings); },
     async open_backups_folder() { return {}; },
@@ -314,6 +338,41 @@
     async import_excel(path, profileName) {
       if (!hasData) { hasData = true; profiles.splice(1); profiles[0].name = profileName || "Moi"; }
       return { added: 130, skipped: 0 };
+    },
+    async preview_chrome_import() {
+      need();
+      return { path: "C:/maquette/Mots de passe Chrome.csv", uptodate: 2, rows: [
+        { name: "Netflix", login: "famille@exemple.fr", password: "Nouveau!2026" },
+        { name: "Paypal", login: "jules@exemple.fr", password: "Pp-4521" },
+        { name: "Leclercdrive", login: "jules", password: "drive" },
+        { name: "Leclercdrive", login: "alexis", password: "drive2" },
+        { name: "Impots", login: "1234567890123", password: "Fisc#2026" },
+      ] };
+    },
+    async import_chrome(rows) {
+      need();
+      let added = 0, updated = 0;
+      for (const r of rows) {
+        const t = r.replace && accounts.find((a) => a.id === r.replace);
+        if (t) { t.password = r.password; t.updated = now(); updated++; continue; }
+        accounts.push({ id: uid(), name: r.name, category: r.category, login: r.login, password: r.password, login_mask: null,
+          password_mask: null, image: null, favorite: false, profiles: [r.profile], created: now(), updated: now() });
+        added++;
+      }
+      return { added, updated };
+    },
+    async delete_chrome_csv() { return true; },
+    async paste_image() {
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((t) => t.startsWith("image/"));
+          if (type) {
+            const blob = await item.getType(type);
+            return await new Promise((res) => { const r = new FileReader(); r.onload = () => resizeDataUrl(r.result).then(res, () => res(null)); r.readAsDataURL(blob); });
+          }
+        }
+      } catch (e) {}
+      return null;
     },
     async start_empty(profileName) { hasData = true; profiles.splice(1); profiles[0].name = profileName || "Moi"; return {}; },
     async export(kind, ids, withCards) {

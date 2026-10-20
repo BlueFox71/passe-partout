@@ -1,4 +1,4 @@
-/* Réglages : verrou, verrouillage automatique, profils, import Excel, sauvegardes. */
+/* Réglages : verrou, verrouillage automatique, profils, import Excel et Chrome, sauvegardes. */
 (function () {
   const V = (PP.views.settings = {});
   const S = PP.state;
@@ -13,12 +13,20 @@
     container.innerHTML = `
       <div class="settings">
         <h2>Réglages</h2>
+        <div class="settings-cards">
 
         <div class="card glass">
           <h3>🔒 Verrou</h3>
           <p>Actuellement : <b style="color:var(--text)">${modeLabel[S.lock_mode]}</b>. Avec un verrou, toutes tes données sont chiffrées sur le disque.</p>
           <div class="seg" id="lk">${["none", "pin", "password"].map((m) => `<button data-m="${m}" class="${m === S.lock_mode ? "on" : ""}">${modeLabel[m]}</button>`).join("")}</div>
           <div id="lk-form" style="margin-top:14px"></div>
+          ${S.lock_mode !== "none" ? `<div class="rq-status">
+            <div><b>Questions de sécurité</b><br><span class="hint">${S.recovery
+              ? "Configurées : elles permettent de débloquer le coffre si tu oublies ton code."
+              : "Non configurées : si tu oublies ton code, tes données seront perdues."}</span></div>
+            <div class="row"><button class="btn btn-ghost" id="rq-set" style="padding:6px 12px">${S.recovery ? "Modifier…" : "Configurer…"}</button>
+              ${S.recovery ? `<button class="icon-btn" id="rq-del" title="Retirer les questions de sécurité">${PP.icon.trash}</button>` : ""}</div>
+          </div>` : ""}
         </div>
 
         <div class="card glass">
@@ -40,7 +48,7 @@
           <div style="margin-top:12px"><button class="btn btn-ghost" id="padd">${PP.icon.plus} Ajouter un profil</button></div>
         </div>
 
-        <div class="card glass">
+        ${missing.count || missing.outdated ? `<div class="card glass">
           <h3>🖼️ Logos</h3>
           <p>Passe-Partout connaît plus de 3 800 marques. Les comptes et cartes sans image peuvent recevoir automatiquement le logo de leur marque,
             et les logos de la bibliothèque déjà posés peuvent être redessinés avec le dernier style. Les images choisies à la main ne sont jamais modifiées.</p>
@@ -58,12 +66,18 @@
             <div class="my-logos-list">${[...PP.logos.mine].sort((a, b) => a[0].localeCompare(b[0], "fr", { sensitivity: "base" }))
               .map(([brand, img]) => `<div class="row">${PP.logo({ name: brand, image: img })}<div><b>${PP.esc(brand)}</b>
                 <small>d'après « ${PP.esc(PP.logos.from.get(brand))} »</small></div></div>`).join("")}</div></details>` : ""}
-        </div>
+        </div>` : ""}
 
         <div class="card glass">
           <h3>📥 Importer un fichier Excel</h3>
           <p>Ajoute les comptes d'un fichier .xlsx (colonnes Type, Support, Identifiant, Mot de passe). Les comptes déjà présents ne sont ni modifiés ni dupliqués.</p>
           <button class="btn btn-ghost" id="imp">Choisir un fichier…</button>
+        </div>
+
+        <div class="card glass">
+          <h3>🌐 Importer depuis Chrome</h3>
+          <p>Récupère les mots de passe enregistrés dans Chrome. Tu pourras revoir chaque compte avant l'import.</p>
+          <button class="btn btn-ghost" id="imp-chrome">Importer depuis Chrome…</button>
         </div>
 
         ${PP.views.sync.card(devices)}
@@ -75,6 +89,7 @@
           ${backups.length ? backups.map((b) => `<div class="prof-row"><div style="flex:1">${PP.esc(b.date)}</div>
             <button class="btn btn-ghost" data-b="${PP.esc(b.name)}" style="padding:6px 12px">Restaurer</button></div>`).join("")
             : `<div class="hint">Aucune sauvegarde pour l'instant.</div>`}
+        </div>
         </div>
         ${info.version ? `<div class="app-version">Passe-Partout ${PP.esc(info.version)}</div>` : ""}
       </div>`;
@@ -95,13 +110,23 @@
       if (p) { await PP.refreshState(); PP.views.main.show(); }
     });
     $("#imp").addEventListener("click", importExcel);
+    if ($("#rq-set")) $("#rq-set").addEventListener("click", () => PP.views.recovery.setup(() => V.render(container)));
+    if ($("#rq-del")) $("#rq-del").addEventListener("click", async () => {
+      if (!(await PP.confirm("Retirer les questions de sécurité ?", "Si tu oublies ton code, tes données ne pourront plus être récupérées.", { ok: "Retirer", danger: true }))) return;
+      await PP.call("clear_recovery");
+      await PP.refreshState();
+      PP.toast("Questions de sécurité retirées");
+      V.render(container);
+    });
+    $("#imp-chrome").addEventListener("click", () => PP.views.chrome.intro());
     $("#bkdir").addEventListener("click", (e) => { e.preventDefault(); PP.call("open_backups_folder"); });
-    $("#logos-up").addEventListener("click", async () => {
+    // carte Logos affichée seulement s'il y a des logos à ajouter ou à mettre à jour
+    if ($("#logos")) $("#logos-up").addEventListener("click", async () => {
       const n = await updateOldLogos();
       PP.toast(`${n} logo${n > 1 ? "s" : ""} mis à jour`);
       await PP.views.main.afterChange();
     });
-    $("#logos").addEventListener("click", async () => {
+    if ($("#logos")) $("#logos").addEventListener("click", async () => {
       const n = await applyMissingLogos();
       PP.toast(`${n} logo${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}`);
       await PP.views.main.afterChange();
@@ -203,6 +228,7 @@
     return PP.call("replace_images", Object.fromEntries(m.oldAccounts), Object.fromEntries(m.oldGiftcards));
   }
 
+  V.applyMissingLogos = applyMissingLogos;
   async function applyMissingLogos() {
     const m = await missingLogos();
     if (!m.count) return 0;

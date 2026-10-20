@@ -89,7 +89,7 @@
           <div class="nav-item ${navOn("accounts", "all")}" data-f="all">${PP.icon.grid}Tous<span class="c">${accounts.length}</span></div>
           <div class="nav-section">Catégories</div>
           <div class="nav-cats">
-            ${categories().map(([c, n]) => `<div class="nav-item ${navOn("accounts", "cat:" + c)}" data-f="cat:${PP.esc(c)}">${PP.icon.tag}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${PP.esc(c)}</span><span class="c">${n}</span></div>`).join("")}
+            ${categories().map(([c, n]) => `<div class="nav-item ${navOn("accounts", "cat:" + c)}" data-f="cat:${PP.esc(c)}" data-drop="${PP.esc(c === catOf({}) && accounts.some((a) => !a.category) ? "" : c)}">${PP.icon.tag}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${PP.esc(c)}</span>${c === catOf({}) && accounts.some((a) => !a.category) ? "" : `<button class="nav-edit" data-rename="${PP.esc(c)}" title="Renommer la catégorie">${PP.icon.edit}</button>`}<span class="c">${n}</span></div>`).join("")}
           </div>
           <div class="nav-bottom">
             <div class="nav-item ${S.view === "bankcards" ? "on" : ""}" data-v="bankcards">${PP.icon.card}Cartes bancaires<span class="c">${bankcards.length}</span></div>
@@ -120,6 +120,8 @@
       n.addEventListener("click", () => { S.view = "accounts"; S.filter = n.dataset.f; S.selectedId = null; renderLayout(); })
     );
     app.querySelectorAll("[data-v]").forEach((n) => n.addEventListener("click", () => { S.view = n.dataset.v; renderLayout(); }));
+    app.querySelectorAll("[data-drop]").forEach(bindCategoryDrop);
+    app.querySelectorAll("[data-rename]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); renameCategory(b.dataset.rename); }));
     const lock = app.querySelector("#lock");
     if (lock) lock.addEventListener("click", PP.lockNow);
     const xb = app.querySelector("#xb");
@@ -267,14 +269,16 @@
         const cls = selecting ? (checked.has(a.id) ? "checked" : "") : (!grid && a.id === S.selectedId ? "on" : "");
         const ck = selecting ? `<div class="ck">${checked.has(a.id) ? "✓" : ""}</div>` : "";
         const sub = PP.esc(PP.applyMask(a.login, a.login_mask) || a.category);
+        // en sélection : la catégorie de chaque compte, pour trier avant un changement groupé
+        const tag = selecting ? `<span class="cat-tag ${a.category ? "" : "none"}">${PP.esc(a.category || "Sans catégorie")}</span>` : "";
         html += grid
-          ? `<div class="item tile ${cls}" data-id="${PP.esc(a.id)}">${ck}
+          ? `<div class="item tile ${cls}" data-id="${PP.esc(a.id)}" draggable="true">${ck}
               ${a.favorite ? `<span class="star">★</span>` : ""}${PP.logo(a, "lg")}
-              <b>${PP.esc(a.name)}</b><small>${sub}</small></div>`
-          : `<div class="item ${cls}" data-id="${PP.esc(a.id)}">${ck}
+              <b>${PP.esc(a.name)}</b><small>${sub}</small>${tag}</div>`
+          : `<div class="item ${cls}" data-id="${PP.esc(a.id)}" draggable="true">${ck}
               ${PP.logo(a)}
               <div class="t"><b>${PP.esc(a.name)}</b><small>${sub}</small></div>
-              ${a.favorite ? `<span class="star">★</span>` : ""}
+              ${tag}${a.favorite ? `<span class="star">★</span>` : ""}
             </div>`;
       }
       close();
@@ -288,6 +292,21 @@
           renderList();
         })
       );
+      listEl.querySelectorAll(".item").forEach((it) => {
+        // glisser vers une catégorie du menu : le compte, ou tous les comptes cochés s'il en fait partie
+        it.addEventListener("dragstart", (e) => {
+          const id = it.dataset.id;
+          const ids = selecting && checked.has(id) ? [...checked] : [id];
+          e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(ids));
+          e.dataTransfer.setData("text/plain", ids.map((x) => accounts.find((acc) => acc.id === x)?.name).join(", "));
+          e.dataTransfer.effectAllowed = "move";
+          document.body.classList.add("dragging-accounts");
+        });
+        it.addEventListener("dragend", () => {
+          document.body.classList.remove("dragging-accounts");
+          setTimeout(runPendingMove); // après la fin complète du glisser
+        });
+      });
       listEl.querySelectorAll(".item").forEach((it) =>
         it.addEventListener("dblclick", () => { if (!selecting) PP.views.form.openAccount(accounts.find((a) => a.id === it.dataset.id)); })
       );
@@ -319,18 +338,85 @@
     if (pr) pr.addEventListener("click", () => bulkProfiles());
   }
 
+  // Dépôt de comptes (glissés depuis la liste) sur une catégorie du menu : ils y sont déplacés.
+  const DRAG_TYPE = "application/x-pp-accounts";
+  function bindCategoryDrop(n) {
+    const ours = (e) => [...e.dataTransfer.types].includes(DRAG_TYPE);
+    n.addEventListener("dragover", (e) => { if (!ours(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; n.classList.add("drop-over"); });
+    n.addEventListener("dragleave", () => n.classList.remove("drop-over"));
+    n.addEventListener("drop", async (e) => {
+      n.classList.remove("drop-over");
+      document.body.classList.remove("dragging-accounts");
+      if (!ours(e)) return;
+      e.preventDefault();
+      const target = n.dataset.drop;
+      const ids = JSON.parse(e.dataTransfer.getData(DRAG_TYPE) || "[]")
+        .filter((id) => PP.normalize(accounts.find((a) => a.id === id)?.category) !== PP.normalize(target));
+      if (!ids.length) return;
+      // La liste n'est redessinée qu'une fois le glisser terminé (dragend) : retirer la ligne glissée
+      // pendant le dépôt laisse le moteur de la fenêtre bloqué, et le glisser suivant ne démarre plus.
+      pendingMove = async () => {
+        await PP.call("bulk_update", ids, { category: target });
+        const label = target || catOf({});
+        PP.toast(ids.length > 1 ? `${ids.length} comptes déplacés dans « ${label} »` : `Compte déplacé dans « ${label} »`);
+        await V.afterChange(false);
+      };
+      setTimeout(runPendingMove, 400); // au cas où dragend n'arriverait pas
+    });
+  }
+  let pendingMove = null;
+  function runPendingMove() {
+    const run = pendingMove;
+    pendingMove = null;
+    if (run) run();
+  }
+
+  // Renomme une catégorie (tous les comptes, tous profils) ; un nom déjà pris fusionne les deux catégories.
+  function renameCategory(old) {
+    const m = PP.modal.open(`
+      <h2>Renommer la catégorie</h2>
+      <div class="field"><label>Nouveau nom de « ${PP.esc(old)} »</label><input class="input" id="rn" value="${PP.esc(old)}" spellcheck="false"></div>
+      <div class="err" id="rn-err"></div>
+      <div class="modal-foot"><button class="btn btn-ghost" id="no">Annuler</button><button class="btn btn-primary" id="ok">Renommer</button></div>`, { cls: "sm" });
+    const input = m.querySelector("#rn");
+    input.focus();
+    input.select();
+    const go = async () => {
+      const name = input.value.replace(/\s+/g, " ").trim();
+      if (!name) { m.querySelector("#rn-err").textContent = "Indique un nom."; return; }
+      if (name === old) { PP.modal.close(); return; }
+      const other = categories().map(([c]) => c).find((c) => PP.normalize(c) === PP.normalize(name) && PP.normalize(c) !== PP.normalize(old));
+      if (other && !(await PP.confirm("Fusionner les catégories ?",
+        `« ${other} » existe déjà : les comptes de « ${old} » y seront regroupés.`, { ok: "Fusionner" }))) return;
+      const r = await PP.call("rename_category", old, name);
+      PP.modal.close();
+      if (PP.normalize(S.filter) === PP.normalize("cat:" + old)) S.filter = "cat:" + r.name;
+      PP.toast(r.merged ? `Catégories fusionnées dans « ${r.name} »` : `Catégorie renommée en « ${r.name} »`);
+      await V.afterChange(false);
+    };
+    m.querySelector("#no").addEventListener("click", () => PP.modal.close());
+    m.querySelector("#ok").addEventListener("click", go);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  }
+
   function bulkCategory() {
-    const cats = categories().map(([c]) => c);
+    const cats = accounts.map((a) => a.category).filter(Boolean);
+    let v = null; // null : rien choisi ; "" : sans catégorie
     const m = PP.modal.open(`
       <h2>Changer la catégorie</h2>
-      <div class="field"><label>Nouvelle catégorie pour ${checked.size} compte(s)</label>
-        <input class="input" id="bc" list="bcl" placeholder="Ex. Banque"><datalist id="bcl">${cats.map((c) => `<option value="${PP.esc(c)}">`).join("")}</datalist></div>
-      <div class="modal-foot"><button class="btn btn-ghost" id="no">Annuler</button><button class="btn btn-primary" id="ok">Appliquer</button></div>`, { cls: "sm" });
-    m.querySelector("#bc").focus();
+      <div class="field"><label>Nouvelle catégorie pour ${checked.size} compte(s)</label>${PP.catPicker.html("", 'id="bc"')}</div>
+      <div class="modal-foot"><button class="btn btn-ghost" id="no">Annuler</button><button class="btn btn-primary" id="ok" disabled>Appliquer</button></div>`, { cls: "sm" });
+    const bc = m.querySelector("#bc");
+    const pick = () => PP.catPicker.open(bc, v || "", cats, (c) => {
+      v = c;
+      PP.catPicker.set(bc, c || "Sans catégorie");
+      m.querySelector("#ok").disabled = false;
+    });
+    bc.addEventListener("click", pick);
+    pick();
     m.querySelector("#no").addEventListener("click", () => PP.modal.close());
     m.querySelector("#ok").addEventListener("click", async () => {
-      const v = m.querySelector("#bc").value.trim();
-      if (!v) return;
+      if (v === null) return;
       await PP.call("bulk_update", [...checked], { category: v });
       PP.modal.close();
       PP.toast("Catégorie mise à jour");

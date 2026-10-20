@@ -91,7 +91,7 @@
           <div id="wlock"></div>
           <div class="err" id="werr"></div>
           <div class="row" style="justify-content:space-between">
-            <span class="hint">Tu pourras importer ton fichier Excel ensuite, dans les Réglages.</span>
+            <span class="hint">Tu pourras ensuite importer tes mots de passe Chrome ou un fichier Excel.</span>
             <button class="btn btn-primary" id="wgo">Créer mon coffre</button>
           </div>
         </div>
@@ -135,7 +135,8 @@
       } finally {
         $("#wgo").disabled = false;
       }
-      PP.route();
+      await PP.route();
+      PP.views.chrome.intro({ welcome: true });
     });
   };
 })();

@@ -192,6 +192,17 @@ class VaultStore:
             raise PermissionError("Coffre verrouillé")
         return hashlib.sha256(b"pp-code-version" + self._salt).hexdigest()[:16]
 
+    def seal(self, data: bytes) -> bytes:
+        """Chiffre un petit secret avec la clé du coffre ouvert (questions de sécurité)."""
+        if self._key is None:
+            raise PermissionError("Coffre verrouillé")
+        return crypto.encrypt_with_key(data, self._key, self._salt, self._n)
+
+    def unseal(self, blob: bytes) -> bytes:
+        if self._key is None:
+            raise PermissionError("Coffre verrouillé")
+        return crypto.decrypt_with_key(blob, self._key)
+
     def forget_key(self) -> None:
         """Efface la clé et les données déchiffrées de la mémoire (verrouillage)."""
         self._key = None

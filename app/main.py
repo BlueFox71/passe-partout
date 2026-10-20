@@ -51,6 +51,7 @@ class Dialogs:
     FILTERS = {
         "image": ("Images (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp;*.ico)",),
         "excel": ("Classeurs Excel (*.xlsx;*.xlsm)",),
+        "csv": ("Fichiers CSV (*.csv)",),
     }
 
     def __init__(self):

@@ -151,6 +151,32 @@ def test_delete_account(api_unlocked):
     assert a["id"] not in [x["id"] for x in api_unlocked.list_accounts(None)]
 
 
+def test_bulk_update_retire_categorie(api_unlocked):
+    ids = [a["id"] for a in api_unlocked.list_accounts(None)]
+    api_unlocked.bulk_update(ids, {"category": ""})
+    assert {a["category"] for a in api_unlocked.list_accounts(None)} == {""}
+    api_unlocked.bulk_update(ids, {"add_profiles": ["p2"]})  # sans clé « category » : inchangée
+    assert {a["category"] for a in api_unlocked.list_accounts(None)} == {""}
+
+
+def test_renommer_categorie(api_unlocked):
+    api_unlocked.save_account(acc_dict(name="Fortuneo", category="banque", profiles=["p2"]))
+    r = api_unlocked.rename_category("Banque", "  Banques   en ligne ")
+    assert r == {"renamed": 2, "name": "Banques en ligne", "merged": False}  # tous profils, casse ignorée
+    assert {a["category"] for a in api_unlocked.list_accounts(None) if a["name"] in ("Boursorama", "Fortuneo")} == {"Banques en ligne"}
+
+
+def test_renommer_categorie_fusion(api_unlocked):
+    r = api_unlocked.rename_category("Banque", "streaming")
+    assert r == {"renamed": 1, "name": "Streaming", "merged": True}
+    assert {a["category"] for a in api_unlocked.list_accounts(None)} == {"Streaming"}
+
+
+def test_renommer_categorie_vide(api_unlocked):
+    with pytest.raises(ValueError):
+        api_unlocked.rename_category("Banque", "  ")
+
+
 def test_bulk_update(api_unlocked):
     ids = [a["id"] for a in api_unlocked.list_accounts(None)]
     api_unlocked.bulk_update(ids, {"category": "Divers", "add_profiles": ["p2"], "remove_profiles": ["p1"]})
@@ -274,3 +300,99 @@ def test_apercu_reimport_sans_modifier(api_unlocked, dialogs, tmp_path):
 
 def test_apercu_annule(api_unlocked):
     assert api_unlocked.preview_import(None) is None
+
+
+# ---------- import Chrome ----------
+def chrome_csv(tmp_path, body):
+    p = tmp_path / "Mots de passe Chrome.csv"
+    p.write_text("name,url,username,password,note\n" + body, encoding="utf-8")
+    return p
+
+
+def test_apercu_chrome(api_unlocked, tmp_path, dialogs):
+    dialogs.file = str(chrome_csv(tmp_path,
+                                  "www.netflix.com,https://www.netflix.com/,famille@exemple.fr,Chill&Popcorn9,\n"
+                                  "accounts.google.com,https://accounts.google.com/,jules@gmail.com,pw,\n"))
+    r = api_unlocked.preview_chrome_import(None)
+    assert r["uptodate"] == 1  # Netflix identique : masqué
+    assert r["rows"] == [{"name": "Google", "login": "jules@gmail.com", "password": "pw"}]
+
+
+def test_apercu_chrome_annule(api_unlocked, dialogs):
+    dialogs.file = None
+    assert api_unlocked.preview_chrome_import(None) is None
+
+
+def test_apercu_chrome_illisible(api_unlocked, tmp_path):
+    p = tmp_path / "x.csv"
+    p.write_bytes(b"\xff\xfe\x00n\x00i")
+    with pytest.raises(ValueError):
+        api_unlocked.preview_chrome_import(str(p))
+
+
+def test_import_chrome_cree_et_remplace(api_unlocked):
+    netflix = next(a for a in api_unlocked.list_accounts(None) if a["name"] == "Netflix")
+    r = api_unlocked.import_chrome([
+        {"name": "Google", "category": "web", "login": "jules@gmail.com", "password": "pw", "profile": "p2", "replace": None},
+        {"name": "Netflix", "category": "Web", "login": "x", "password": "Nouveau!", "profile": "p1", "replace": netflix["id"]},
+    ])
+    assert r == {"added": 1, "updated": 1}
+    accs = {a["name"]: a for a in api_unlocked.list_accounts(None)}
+    g = accs["Google"]
+    assert (g["category"], g["login"], g["password"], g["profiles"]) == ("web", "jules@gmail.com", "pw", ["p2"])
+    n = accs["Netflix"]  # seul le mot de passe change
+    assert (n["password"], n["login"], n["category"], n["profiles"]) == ("Nouveau!", "famille@exemple.fr", "Streaming", ["p1", "p2"])
+
+
+def test_import_chrome_categorie_existante(api_unlocked):
+    api_unlocked.import_chrome([{"name": "A", "category": "banque", "login": "", "password": "1", "profile": "p1", "replace": None}])
+    assert next(a for a in api_unlocked.list_accounts(None) if a["name"] == "A")["category"] == "Banque"
+
+
+def test_import_chrome_invalide_ne_modifie_rien(api_unlocked):
+    before = api_unlocked.list_accounts(None)
+    with pytest.raises(ValueError):
+        api_unlocked.import_chrome([
+            {"name": "Ok", "category": "Web", "login": "", "password": "1", "profile": "p1", "replace": None},
+            {"name": " ", "category": "Web", "login": "", "password": "1", "profile": "p1", "replace": None},
+        ])
+    with pytest.raises(ValueError):
+        api_unlocked.import_chrome([{"name": "X", "category": "Web", "login": "", "password": "1", "profile": "inconnu", "replace": None}])
+    assert api_unlocked.list_accounts(None) == before
+
+
+def test_supprimer_csv_chrome(api_unlocked, tmp_path, dialogs):
+    p = chrome_csv(tmp_path, "a.fr,https://a.fr/,a,b,\n")
+    assert api_unlocked.delete_chrome_csv() is False  # aucun fichier lu : rien à supprimer
+    api_unlocked.preview_chrome_import(str(p))
+    assert api_unlocked.delete_chrome_csv() is True
+    assert not p.exists()
+
+
+def test_import_chrome_avec_image(api_unlocked):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), "green").save(buf, "PNG")
+    from app.images import normalize_image
+    png = normalize_image(buf.getvalue())
+    netflix = next(a for a in api_unlocked.list_accounts(None) if a["name"] == "Netflix")
+    api_unlocked.import_chrome([
+        {"name": "Google", "category": "Web", "login": "", "password": "1", "profile": "p1", "replace": None, "image": png},
+        {"name": "Netflix", "category": "Web", "login": "", "password": "2", "profile": "p1", "replace": netflix["id"], "image": png},
+        {"name": "Autre", "category": "Web", "login": "", "password": "3", "profile": "p1", "replace": None, "image": "javascript:x"},
+    ])
+    accs = {a["name"]: a for a in api_unlocked.list_accounts(None)}
+    assert accs["Google"]["image"] == png and accs["Netflix"]["image"] == png and accs["Autre"]["image"] is None
+
+
+def test_coller_image(api_unlocked, tmp_path):
+    from PIL import Image
+    api_unlocked._grab_clipboard = lambda: None
+    assert api_unlocked.paste_image() is None
+    api_unlocked._grab_clipboard = lambda: Image.new("RGB", (600, 300), "red")
+    assert api_unlocked.paste_image().startswith("data:image/png;base64,")
+    f = tmp_path / "logo.png"
+    Image.new("RGB", (10, 10), "blue").save(f)
+    api_unlocked._grab_clipboard = lambda: [str(tmp_path / "pas-une-image.txt"), str(f)]
+    assert api_unlocked.paste_image().startswith("data:image/png;base64,")
