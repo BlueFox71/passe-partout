@@ -78,6 +78,7 @@ input, select, textarea, button { font: inherit; color: inherit; }
 .icon-btn:hover { background: rgba(255, 61, 154, .18); color: #fff; box-shadow: 0 0 12px rgba(255, 61, 154, .35); }
 .icon-btn svg { width: 17px; height: 17px; }
 .icon-btn.on { color: var(--warn); }
+.icon-btn:disabled { opacity: .3; pointer-events: none; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label, .label {
@@ -146,6 +147,9 @@ select.input option { background: #1a0b2e; }
 .profile-tile .av {
   width: 130px; height: 130px; border-radius: 26px; display: flex; align-items: center; justify-content: center;
   font-size: 54px; font-weight: 800; color: #fff; overflow: hidden; border: 3px solid transparent;
+  /* sinon le dégradé se répète dans la bordure transparente (liseré sur les bords) ;
+     !important car les « background: » des tuiles remettent l'origine par défaut */
+  background-origin: border-box !important;
   transition: border-color .2s, box-shadow .25s;
 }
 .profile-tile .av img { width: 100%; height: 100%; object-fit: cover; }
@@ -412,3 +416,43 @@ select.input option { background: #1a0b2e; }
 .apk-urls { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .apk-urls a { color: var(--cyan); }
 .app-version { text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0 10px; }
+
+/* ---------- réglages : tes logos de référence ---------- */
+.my-logos { margin-top: 14px; }
+.my-logos summary { cursor: pointer; color: var(--muted); }
+.my-logos-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.my-logos-list .row { gap: 10px; min-width: 0; }
+.my-logos-list .logo { width: 34px; height: 34px; border-radius: 10px; }
+.my-logos-list small { display: block; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- cartes bancaires ---------- */
+.bc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+.bc-item { cursor: pointer; transition: transform .2s; }
+.bc-item:hover { transform: translateY(-4px); }
+.bc-visual {
+  aspect-ratio: 1.586; border-radius: 16px; padding: 16px 18px; color: #fff; display: flex; flex-direction: column;
+  justify-content: space-between; box-shadow: 0 14px 30px rgba(0, 0, 0, .45); text-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  position: relative; overflow: hidden; min-width: 0;
+}
+.bc-visual::after { /* reflet */
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, rgba(255, 255, 255, .16), transparent 45%);
+}
+.bc-item:hover .bc-visual { box-shadow: 0 18px 36px rgba(0, 0, 0, .5), 0 0 26px rgba(255, 61, 154, .35); }
+.bc-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bc-top b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-top .logo { width: 34px; height: 34px; border-radius: 9px; font-size: 15px; box-shadow: 0 2px 8px rgba(0, 0, 0, .3); }
+.bc-num { font-family: Consolas, "Cascadia Mono", monospace; font-size: 17px; letter-spacing: 2px; }
+.bc-bot { display: flex; align-items: flex-end; gap: 16px; font-size: 13px; font-weight: 600; }
+.bc-bot small { display: block; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; opacity: .75; }
+.bc-holder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; }
+.bc-net { font-size: 15px; font-style: italic; letter-spacing: .02em; }
+.bc-visual.big { width: 300px; flex: none; }
+.bc-cols { display: flex; gap: 22px; align-items: flex-start; }
+.bc-fields { flex: 1; min-width: 0; gap: 8px; }
+.bc-fields .fld { padding-top: 8px; padding-bottom: 8px; }
+.bc-mono { font-family: Consolas, "Cascadia Mono", monospace; letter-spacing: 1px; }
+
+/* ---------- cartes fidélité ---------- */
+.gc.lc .top { margin-bottom: 10px; }
+.lc-num { font-family: Consolas, "Cascadia Mono", monospace; font-size: 15px; letter-spacing: 1px; color: #e6fdff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

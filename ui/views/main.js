@@ -4,6 +4,8 @@
   const S = PP.state;
   let accounts = [];
   let giftcards = [];
+  let bankcards = [];
+  let loyaltycards = [];
   let revealed = false;
   let selecting = false;
   let checked = new Set();
@@ -18,17 +20,26 @@
   };
 
   V.reload = async () => {
-    [accounts, giftcards] = await Promise.all([
+    [accounts, giftcards, bankcards, loyaltycards] = await Promise.all([
       PP.call("list_accounts", S.profileId ?? null),
       PP.call("list_giftcards", S.profileId ?? null),
+      PP.call("list_bankcards", S.profileId ?? null),
+      PP.call("list_loyaltycards", S.profileId ?? null),
     ]);
+    // tes images servent de logo de référence, quel que soit le profil affiché
+    const all = S.profileId == null ? [accounts, giftcards]
+      : await Promise.all([PP.call("list_accounts", null), PP.call("list_giftcards", null)]);
+    PP.logos.learn(all.flat());
   };
   V.giftcards = () => giftcards;
 
   // Au verrouillage : oublie les données déchiffrées gardées par l'interface.
   V.clear = () => {
+    PP.logos.mine = new Map();
     accounts = [];
     giftcards = [];
+    bankcards = [];
+    loyaltycards = [];
     checked.clear();
     selecting = false;
     revealed = false;
@@ -70,10 +81,10 @@
       <div class="layout" id="main-layout">
         <aside class="nav">
           ${PP.brand()}
-          <div class="nav-profile" id="switch" title="Changer de profil">
-            ${prof ? PP.avatar(prof) : `<div class="logo" style="background:conic-gradient(from 200deg,#ff3d9a,#7c3aed,#00e5ff,#ff3d9a)">${PP.icon.users.replace("<svg", '<svg style="width:18px"')}</div>`}
+          <div class="suggest-wrap"><div class="nav-profile" id="switch" title="Changer de profil">
+            ${prof ? PP.avatar(prof) : everyoneLogo()}
             <div><div style="font-weight:600">${PP.esc(prof ? prof.name : "Tout le monde")}</div><small>Changer de profil</small></div>
-          </div>
+          </div></div>
           <div class="nav-item ${navOn("accounts", "fav")}" data-f="fav">${PP.icon.star}Favoris<span class="c">${favCount}</span></div>
           <div class="nav-item ${navOn("accounts", "all")}" data-f="all">${PP.icon.grid}Tous<span class="c">${accounts.length}</span></div>
           <div class="nav-section">Catégories</div>
@@ -81,6 +92,8 @@
             ${categories().map(([c, n]) => `<div class="nav-item ${navOn("accounts", "cat:" + c)}" data-f="cat:${PP.esc(c)}">${PP.icon.tag}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${PP.esc(c)}</span><span class="c">${n}</span></div>`).join("")}
           </div>
           <div class="nav-bottom">
+            <div class="nav-item ${S.view === "bankcards" ? "on" : ""}" data-v="bankcards">${PP.icon.card}Cartes bancaires<span class="c">${bankcards.length}</span></div>
+            <div class="nav-item ${S.view === "loyalty" ? "on" : ""}" data-v="loyalty">${PP.icon.barcode}Cartes fidélité<span class="c">${loyaltycards.length}</span></div>
             <div class="nav-item ${S.view === "giftcards" ? "on" : ""}" data-v="giftcards">${PP.icon.gift}Cartes cadeaux${soon.length ? `<span class="badge">${soon.length}</span>` : `<span class="c">${giftcards.length}</span>`}</div>
             <div class="nav-item ${S.view === "settings" ? "on" : ""}" data-v="settings">${PP.icon.gear}Réglages</div>
             ${S.lock_mode !== "none" ? `<div class="nav-item" id="lock">${PP.icon.lock}Verrouiller</div>` : ""}
@@ -102,7 +115,7 @@
         </section>
       </div>`);
 
-    app.querySelector("#switch").addEventListener("click", () => { S.profileId = undefined; S.view = "accounts"; PP.views.profiles.show(); });
+    app.querySelector("#switch").addEventListener("click", toggleProfileMenu);
     app.querySelectorAll("[data-f]").forEach((n) =>
       n.addEventListener("click", () => { S.view = "accounts"; S.filter = n.dataset.f; S.selectedId = null; renderLayout(); })
     );
@@ -125,11 +138,51 @@
     renderContent();
   }
 
+  const everyoneLogo = () =>
+    `<div class="logo" style="background:conic-gradient(from 200deg,#ff3d9a,#7c3aed,#00e5ff,#ff3d9a)">${PP.icon.users.replace("<svg", '<svg style="width:18px"')}</div>`;
+
+  // Menu déroulant sous le profil courant : les autres profils, puis « Modifier votre profil ».
+  function toggleProfileMenu() {
+    const wrap = document.getElementById("switch").parentElement;
+    const old = wrap.querySelector(".suggest");
+    if (old) return old.close();
+    const prof = currentProfile();
+    const opts = S.profiles.map((p) => [p.id, PP.avatar(p), p.name]);
+    if (S.profiles.length > 1) opts.push(["*", everyoneLogo(), "Tout le monde"]);
+    const box = document.createElement("div");
+    box.className = "suggest";
+    box.innerHTML = opts.map(([id, logo, name]) =>
+      `<div class="opt ${id === (S.profileId ?? "*") ? "on" : ""}" data-pp="${PP.esc(id)}">${logo}${PP.esc(name)}</div>`).join("")
+      + (prof ? `<div class="opt" id="pp-edit" style="border-top:1px solid var(--line);margin-top:4px;border-radius:0 0 10px 10px">
+          <div class="logo" style="background:var(--glass)">${PP.icon.edit.replace("<svg", '<svg style="width:16px"')}</div>Modifier votre profil</div>` : "");
+    wrap.appendChild(box);
+    const close = (e) => {
+      if (e && wrap.contains(e.target)) return;
+      box.remove();
+      document.removeEventListener("mousedown", close);
+    };
+    box.close = close;
+    document.addEventListener("mousedown", close);
+    box.querySelectorAll("[data-pp]").forEach((o) => o.addEventListener("click", () => {
+      close();
+      const id = o.dataset.pp === "*" ? null : o.dataset.pp;
+      if (id !== (S.profileId ?? null)) PP.chooseProfile(id);
+    }));
+    const edit = box.querySelector("#pp-edit");
+    if (edit) edit.addEventListener("click", async () => {
+      close();
+      const p = await PP.views.profiles.edit(prof);
+      if (p) { await PP.refreshState(); V.show(); }
+    });
+  }
+
   function navOn(view, filter) { return S.view === view && S.filter === filter ? "on" : ""; }
 
   function renderContent() {
     const c = document.getElementById("content");
     if (S.view === "giftcards") return PP.views.giftcards.render(c, giftcards);
+    if (S.view === "bankcards") return PP.views.bankcards.render(c, bankcards);
+    if (S.view === "loyalty") return PP.views.loyalty.render(c, loyaltycards);
     if (S.view === "settings") return PP.views.settings.render(c);
     c.innerHTML = `<div class="list ${isGrid() ? "grid-mode" : ""}"><div class="list-head"></div>
         <div class="list-body"><div class="list-scroll" id="list"></div><div class="az" id="az"></div></div>
@@ -324,20 +377,54 @@
     return `<div class="strength" style="--c:${colors[s]}">${[1, 2, 3, 4].map((i) => `<i class="${i <= s ? "on" : ""}"></i>`).join("")}<span>${labels[s]}</span></div>`;
   }
 
-  // Vue grille : la fiche s'ouvre dans une fenêtre par-dessus.
+  // Vue grille : la fiche s'ouvre dans une fenêtre par-dessus, avec ← → pour passer au compte voisin.
   function openDetail(a) {
     if (!a) return;
+    let id = a.id;
+    const onKey = (e) => {
+      if (e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || "")) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+    };
     const m = PP.modal.open(`<div class="detail in-modal"></div>
-      <div class="modal-foot"><button class="btn btn-ghost" id="dm-close">Fermer</button></div>`, { cls: "wide" });
+      <div class="modal-foot">
+        <div class="left row" style="gap:6px">
+          <button class="icon-btn" id="dm-prev" title="Compte précédent (←)">${PP.icon.back}</button>
+          <button class="icon-btn" id="dm-next" title="Compte suivant (→)">${PP.icon.next}</button>
+          <small id="dm-pos" style="color:var(--faint)"></small>
+        </div>
+        <button class="btn btn-ghost" id="dm-close">Fermer</button></div>`,
+      { cls: "wide", onClose: () => window.removeEventListener("keydown", onKey) });
+    window.addEventListener("keydown", onKey);
     m.querySelector("#dm-close").addEventListener("click", () => PP.modal.close());
+    m.querySelector("#dm-prev").addEventListener("click", () => go(-1));
+    m.querySelector("#dm-next").addEventListener("click", () => go(1));
     const box = m.querySelector(".detail");
+    const go = (step) => {
+      const vis = V.visible();
+      const next = vis[vis.findIndex((x) => x.id === id) + step];
+      if (!next || !document.body.contains(box)) return;
+      id = next.id;
+      revealed = false;
+      redraw();
+      const tile = document.querySelector(`#list [data-id="${CSS.escape(id)}"]`);
+      if (tile) tile.scrollIntoView({ block: "nearest" }); // la grille suit, pour s'y retrouver en fermant
+    };
     // redessine seulement le contenu de la fenêtre (sans la fermer / rouvrir)
     const redraw = () => {
-      const fresh = accounts.find((x) => x.id === a.id);
-      if (fresh && document.body.contains(box)) fillDetail(box, fresh, redraw);
+      const fresh = accounts.find((x) => x.id === id);
+      if (!fresh || !document.body.contains(box)) return;
+      S.selectedId = id;
+      fillDetail(box, fresh, redraw);
+      const vis = V.visible();
+      const i = vis.findIndex((x) => x.id === id);
+      m.querySelector("#dm-prev").disabled = i <= 0;
+      m.querySelector("#dm-next").disabled = i < 0 || i >= vis.length - 1;
+      m.querySelector("#dm-pos").textContent = i < 0 ? "" : `${i + 1} / ${vis.length}`;
     };
-    fillDetail(box, a, redraw);
+    redraw();
   }
+  V.openDetail = (id) => openDetail(accounts.find((a) => a.id === id));
 
   function renderDetail() {
     const d = document.getElementById("detail");
@@ -383,8 +470,10 @@
     d.querySelector("#cp").addEventListener("click", () => PP.copySecret(a.password));
     const cl = d.querySelector("#cl");
     if (cl) cl.addEventListener("click", () => PP.copyPlain(a.login));
-    d.querySelector("#edit").addEventListener("click", () => PP.views.form.openAccount(a));
     const inModal = d.classList.contains("in-modal");
+    // Depuis la fenêtre de la grille, on revient à la fiche après « Enregistrer » ou « Annuler ».
+    d.querySelector("#edit").addEventListener("click", () =>
+      PP.views.form.openAccount(a, "", inModal ? { back: V.openDetail } : {}));
     d.querySelector("#fav").addEventListener("click", async () => {
       await PP.call("save_account", { ...a, favorite: !a.favorite });
       await V.afterChange(false);
@@ -399,11 +488,19 @@
     });
   }
 
-  // Après une modification : recharge les données et redessine en gardant la position.
+  // Après une modification : recharge les données et redessine en gardant la position dans la liste.
   V.afterChange = async (resetSelection = true) => {
+    const top = document.getElementById("list")?.scrollTop || 0;
+    const wanted = S.selectedId;
     await V.reload();
     if (resetSelection) { selecting = false; checked.clear(); }
     renderLayout();
+    const list = document.getElementById("list");
+    if (!list) return;
+    list.scrollTop = top;
+    // compte renommé ou nouveau : on le ramène à l'écran s'il est sorti de la zone visible
+    const sel = wanted && wanted === S.selectedId && list.querySelector(`[data-id="${CSS.escape(wanted)}"]`);
+    if (sel) sel.scrollIntoView({ block: "nearest" });
   };
 
   V.select = (id) => { S.selectedId = id; revealed = false; };
@@ -417,6 +514,8 @@
 
   V.newItem = () => {
     if (S.view === "giftcards") return PP.views.giftcards.openForm(null);
+    if (S.view === "bankcards") return PP.views.bankcards.openForm(null);
+    if (S.view === "loyalty") return PP.views.loyalty.openForm(null);
     const preset = S.filter.startsWith("cat:") ? S.filter.slice(4) : "";
     PP.views.form.openAccount(null, preset);
   };

@@ -41,7 +41,7 @@ _MESSAGES = {
 }
 _UPDATE_NO_VERSION = "Mets à jour l'appli : sur le PC, Réglages → Installer l'appli sur le téléphone."
 
-_KINDS = ("account", "giftcard", "profile")
+_KINDS = ("account", "giftcard", "bankcard", "loyaltycard", "profile")
 _TOMBSTONE_KEYS = frozenset({"kind", "id", "at"})
 _HISTORY_KEYS = frozenset({"id", "date", "amount"})
 
@@ -148,7 +148,8 @@ def validate_phone_vault(d: dict) -> Vault:
     """Vérifie le coffre envoyé par le téléphone et le convertit ; ValueError si structure ou types invalides."""
     if not isinstance(d, dict):
         _invalid("vault")
-    for key in ("profiles", "accounts", "giftcards", "deleted"):
+    d = {"bankcards": [], "loyaltycards": [], **d}  # absentes : coffre sans carte bancaire ni fidélité
+    for key in ("profiles", "accounts", "giftcards", "bankcards", "loyaltycards", "deleted"):
         if not isinstance(d.get(key), list):
             _invalid(key)
 
@@ -188,6 +189,18 @@ def validate_phone_vault(d: dict) -> Vault:
             _day(h.get("date"), "date")
             _amount(h.get("amount"), "amount", positive=True)
         giftcards.append(g)
+    bankcards = []
+    for b in d["bankcards"]:
+        _item(b, "bankcard", ("holder", "number", "expiry", "cvv", "pin"), ())
+        _image(b, "image")
+        _profile_ids(b)
+        bankcards.append(b)
+    loyaltycards = []
+    for c in d["loyaltycards"]:
+        _item(c, "loyaltycard", ("number", "pin"), ())
+        _image(c, "image")
+        _profile_ids(c)
+        loyaltycards.append(c)
     for t in d["deleted"]:
         if not isinstance(t, dict) or t.get("kind") not in _KINDS:
             _invalid("deleted")
@@ -195,12 +208,14 @@ def validate_phone_vault(d: dict) -> Vault:
         _str(t, "id", required=True, nonempty=True)
         _date(t.get("at"), "deleted")
 
-    for name, items in (("profiles", profiles), ("accounts", accounts), ("giftcards", giftcards)):
+    for name, items in (("profiles", profiles), ("accounts", accounts), ("giftcards", giftcards),
+                        ("bankcards", bankcards), ("loyaltycards", loyaltycards)):
         ids = [i["id"] for i in items]
         if len(ids) != len(set(ids)):
             _invalid(f"{name} (id en double)")
     try:
         return Vault.from_dict({"profiles": profiles, "accounts": accounts, "giftcards": giftcards,
+                                "bankcards": bankcards, "loyaltycards": loyaltycards,
                                 "deleted": d["deleted"]})
     except (TypeError, AttributeError) as e:
         raise ValueError("Coffre du téléphone invalide") from e
@@ -430,7 +445,8 @@ class SyncFlow:
         pc_vault = self._store.vault
         if replace:
             vault = Vault.from_dict(pc_vault.to_dict())
-            items = len(vault.profiles) + len(vault.accounts) + len(vault.giftcards)
+            items = (len(vault.profiles) + len(vault.accounts) + len(vault.giftcards) + len(vault.bankcards)
+                     + len(vault.loyaltycards))
             summary = {"to_pc": 0, "to_phone": items, "deleted": 0, "conflicts": 0}
         else:
             result = merge(pc_vault, phone, last_sync, synced_at)

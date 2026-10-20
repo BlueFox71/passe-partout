@@ -314,3 +314,25 @@ body:has(.m-sheet:not([hidden])) #toasts { top: calc(var(--safe-top) + 64px); bo
 #s-bio { min-height: 44px; min-width: 52px; border: 0; background: none; padding: 0; justify-content: flex-end; }
 .m-set-code { align-items: center; display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
 .m-set-body .btn { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+
+/* ---------- cartes bancaires ---------- */
+.m-tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-bc-list {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 6px 16px 96px; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 14px;
+}
+.m-bc-item { display: block; width: 100%; max-width: 440px; margin: 0 auto; padding: 0; border: 0; background: none; cursor: pointer; text-align: left; color: inherit; }
+.m-bc-item:active .bc-visual { transform: scale(.98); }
+.m-bc-item .bc-visual { transition: transform .15s; }
+.m-bc-big { padding: 4px 0 6px; max-width: 440px; width: 100%; margin: 0 auto; }
+.m-bc-big .bc-visual.big { width: 100%; }
+.m-bc-profs { text-align: center; margin-bottom: 4px; }
+
+/* ---------- cartes fidélité (onglet Cartes) ---------- */
+.m-bc-seg { margin: 0 16px 8px; align-self: flex-start; }
+.m-bc-seg button { min-height: 36px; }
+.m-bc-list.m-lc-list { display: block; padding: 4px 8px 96px; }
+.m-scan-row { display: flex; gap: 8px; }
+.m-scan-row .input { flex: 1; min-width: 0; }
+.m-scan { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; }
+.m-scan svg { width: 18px; height: 18px; }

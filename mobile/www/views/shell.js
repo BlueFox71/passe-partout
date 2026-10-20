@@ -1,5 +1,5 @@
 /* Téléphone — coquille de navigation : contenu de l'onglet + barre d'onglets du bas.
-   Chaque onglet affiche PP.views.<accounts|cards|sync|settings>.show(conteneur) s'il existe
+   Chaque onglet affiche PP.views.<accounts|bankcards|cards|sync|settings>.show(conteneur) s'il existe
    (Tâches 12 à 15), sinon « Bientôt disponible ».
    Contrat (décision 14) : PP.views.sync.show(container?) — sans conteneur, la vue de synchro s'affiche
    en plein écran (accueil, données illisibles : views/welcome.js) ; avec un conteneur, dans l'onglet Synchro. */
@@ -9,7 +9,8 @@
     <circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M16 7l3 3M14 9l2 2"/></svg>`;
   const TABS = [
     { id: "accounts", label: "Comptes", icon: KEY },
-    { id: "cards", label: "Cartes", icon: PP.icon.gift },
+    { id: "bankcards", label: "Cartes", icon: PP.icon.card },
+    { id: "cards", label: "Cadeaux", icon: PP.icon.gift },
     { id: "sync", label: "Synchro", icon: PP.icon.sync },
     { id: "settings", label: "Réglages", icon: PP.icon.gear },
   ];

@@ -20,6 +20,7 @@
   const accounts = [
     A("Boursorama", "Banque", "48213377", "Tr0mpette!Bleue", { favorite: true }),
     A("Carte Bleue", "Banque", "4970 •••• 1234", "482", { password_mask: null }),
+    A("Carte Bleu Alexis", "Banque", "5131 4567 8901 2346", "1234", { profiles: ["p2"] }),
     A("PayPal", "Banque", "jules@exemple.fr", "Papillon#2024", { profiles: ["p1", "p2"] }),
     A("Gmail", "Boîte mail", "jules@exemple.fr", "Nuage-Violet-88", { favorite: true }),
     A("Outlook", "Boîte mail", "alexis@exemple.fr", "soleil2019", { profiles: ["p2"] }),
@@ -54,6 +55,39 @@
     G("Decathlon", 80, null, { profiles: ["p2"] }),
     G("Sephora", 0, iso(90), { initial: 30, history: [{ date: iso(-40), amount: 30 }], profiles: ["p2"] }),
   ];
+  const B = (name, holder, number, expiry, extra = {}) => ({
+    id: uid(), name, holder, number, expiry, cvv: String(100 + Math.floor(Math.random() * 900)),
+    pin: String(1000 + Math.floor(Math.random() * 9000)), image: null, profiles: ["p1"], updated: now(), ...extra,
+  });
+  const bankcards = [
+    B("Boursorama", "JULES CANNET", "4970 1234 5678 1234", "12/28"),
+    B("Revolut", "JULES CANNET", "5355 2210 9876 5432", "03/27", { profiles: ["p1", "p2"] }),
+  ];
+  const loyaltycards = [
+    { id: uid(), name: "Leclerc", number: "2912345678901", pin: "", image: null, profiles: ["p1", "p2"], updated: now() },
+    { id: uid(), name: "Sephora", number: "", pin: "4821", image: null, profiles: ["p2"], updated: now() },
+  ];
+  // même règle que app/bankcards.py : réseau reconnu, bonne longueur, clé de Luhn valide
+  const isCardNumber = (d) => {
+    if (!/^\d{13,19}$/.test(d)) return false;
+    const ok = (d[0] === "4" && [13, 16, 19].includes(d.length))
+      || (d.length === 16 && ((+d.slice(0, 2) >= 51 && +d.slice(0, 2) <= 55) || (+d.slice(0, 4) >= 2221 && +d.slice(0, 4) <= 2720)))
+      || (d.length === 15 && ["34", "37"].includes(d.slice(0, 2)));
+    let sum = 0;
+    [...d].reverse().forEach((c, i) => { let n = +c * (i % 2 ? 2 : 1); sum += n > 9 ? n - 9 : n; });
+    return ok && sum % 10 === 0;
+  };
+  // comme le PC : les comptes dont l'identifiant est un numéro de carte deviennent des cartes (une fois)
+  let converted = 0;
+  for (const a of [...accounts]) {
+    const digits = a.login.replace(/[\s-]/g, "");
+    if (!isCardNumber(digits)) continue;
+    const cvv = /^\d{3}$/.test(a.password);
+    bankcards.push({ id: a.id, name: a.name, holder: "", number: digits, expiry: "", cvv: cvv ? a.password : "",
+      pin: cvv ? "" : a.password, image: a.image, profiles: a.profiles, updated: now() });
+    accounts.splice(accounts.indexOf(a), 1);
+    converted++;
+  }
   let settings = { autolock_minutes: 10 };
   let lock = { mode: params.has("sansverrou") ? "none" : "pin", code: "123456" };
   let hasData = !params.has("bienvenue");
@@ -98,7 +132,9 @@
 
   window.MockApi = {
     async get_state() {
-      return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true };
+      const conv = locked ? 0 : converted;
+      if (!locked) converted = 0;
+      return { locked, lock_mode: lock.mode, pin_length: lock.mode === "pin" ? (lock.code || "").length : null, has_data: hasData, corrupt: params.has("corrompu"), profiles: clone(profiles), mock: true, converted_cards: conv };
     },
     async unlock(code) {
       await new Promise((r) => setTimeout(r, 400)); // comme la vraie dérivation de clé
@@ -158,6 +194,40 @@
       return clone(g);
     },
 
+    async list_bankcards(pid) {
+      need();
+      return clone(bankcards.filter(inProfile(pid)).sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })));
+    },
+    async save_bankcard(b) {
+      need();
+      if (!b.name || !b.name.trim()) throw new Error("Le nom est obligatoire");
+      if (!b.profiles || !b.profiles.length) throw new Error("Choisis au moins un profil");
+      let exp = String(b.expiry || "").replace(/\s/g, "");
+      const m = /^(\d{1,2})[/.-]?(\d{2}|\d{4})$/.exec(exp);
+      if (m) exp = `${m[1].padStart(2, "0")}/${m[2].slice(-2)}`;
+      if (exp && !/^(0[1-9]|1[0-2])\/\d{2}$/.test(exp)) throw new Error("Date d'expiration invalide (format MM/AA)");
+      const i = bankcards.findIndex((x) => x.id === b.id);
+      const rec = { ...b, name: b.name.trim(), expiry: exp, updated: now() };
+      if (i >= 0) bankcards[i] = rec; else { rec.id = uid(); bankcards.push(rec); }
+      return clone(rec);
+    },
+    async delete_bankcard(id) { need(); bankcards.splice(bankcards.findIndex((x) => x.id === id), 1); return {}; },
+
+    async list_loyaltycards(pid) {
+      need();
+      return clone(loyaltycards.filter(inProfile(pid)).sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })));
+    },
+    async save_loyaltycard(c) {
+      need();
+      if (!c.name || !c.name.trim()) throw new Error("Le nom est obligatoire");
+      if (!c.profiles || !c.profiles.length) throw new Error("Choisis au moins un profil");
+      const i = loyaltycards.findIndex((x) => x.id === c.id);
+      const rec = { ...c, name: c.name.trim(), number: String(c.number || "").trim(), pin: String(c.pin || "").trim(), updated: now() };
+      if (i >= 0) loyaltycards[i] = rec; else { rec.id = uid(); loyaltycards.push(rec); }
+      return clone(rec);
+    },
+    async delete_loyaltycard(id) { need(); loyaltycards.splice(loyaltycards.findIndex((x) => x.id === id), 1); return {}; },
+
     async save_profile(p) {
       need();
       if (!p.name || !p.name.trim()) throw new Error("Le nom est obligatoire");
@@ -168,7 +238,7 @@
     async delete_profile(id, reassignTo) {
       need();
       if (profiles.length <= 1) throw new Error("Il faut garder au moins un profil");
-      for (const x of [...accounts, ...giftcards]) {
+      for (const x of [...accounts, ...giftcards, ...bankcards, ...loyaltycards]) {
         if (!x.profiles.includes(id)) continue;
         x.profiles = x.profiles.filter((p) => p !== id);
         if (!x.profiles.length) x.profiles = [reassignTo];

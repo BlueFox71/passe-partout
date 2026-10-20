@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ui = join(here, "..", "..", "ui");
 const out = join(here, "..", "www", "shared");
 
-const FILES = ["app.js", "logos.js", "style.css", "assets/icon.svg"];
+const FILES = ["app.js", "logos.js", "logos-perso.js", "style.css", "assets/icon.svg"];
 
 for (const f of FILES) {
   const dest = join(out, f);

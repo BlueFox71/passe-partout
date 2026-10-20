@@ -194,7 +194,7 @@ test("les données produites passent la validation du PC (validate_phone_vault)"
   const DAY = /^\d{4}-\d{2}-\d{2}$/;
   const okImg = (x) => x === null || (typeof x === "string" && x.startsWith("data:image/"));
   const okAmount = (x, pos) => typeof x === "number" && Number.isFinite(x) && x >= 0 && (!pos || x > 0);
-  assert.deepEqual(Object.keys(v).sort(), ["accounts", "deleted", "giftcards", "profiles", "version"]);
+  assert.deepEqual(Object.keys(v).sort(), ["accounts", "bankcards", "deleted", "giftcards", "loyaltycards", "profiles", "version"]);
   const ids = new Set();
   for (const x of v.accounts) {
     assert.match(x.updated, TS);
@@ -225,4 +225,57 @@ test("les données produites passent la validation du PC (validate_phone_vault)"
     assert.match(t.at, TS);
     assert.ok(["account", "giftcard"].includes(t.kind));
   }
+});
+
+test("cartes bancaires : enregistrement, expiration normalisée, liste par profil, suppression", () => {
+  const v = base();
+  const sync = "2026-10-19T10:03:00";
+  const b = V.saveBankcard(v, { name: " Boursorama ", holder: "  JULES   C ", number: "4970  1234 5678 1234",
+    expiry: "1228", cvv: " 123 ", pin: "4321", profiles: ["p1"] }, T0, sync);
+  assert.deepEqual(
+    { name: b.name, holder: b.holder, number: b.number, expiry: b.expiry, cvv: b.cvv, pin: b.pin, image: b.image },
+    { name: "Boursorama", holder: "JULES C", number: "4970 1234 5678 1234", expiry: "12/28", cvv: "123", pin: "4321", image: null });
+  assert.ok(b.updated > sync); // horodatée après la dernière synchro
+  assert.deepEqual(Object.keys(b).sort(),
+    ["cvv", "expiry", "holder", "id", "image", "name", "number", "pin", "profiles", "updated"]);
+  V.saveBankcard(v, { name: "Revolut", profiles: ["p2"] }, T0, sync);
+  assert.deepEqual(V.listBankcards(v, "p1").map((x) => x.name), ["Boursorama"]);
+  assert.deepEqual(V.listBankcards(v, null).map((x) => x.name), ["Boursorama", "Revolut"]);
+  const again = V.saveBankcard(v, { ...b, expiry: "3/2029" }, T0, sync);
+  assert.equal(again.id, b.id);
+  assert.equal(again.expiry, "03/29");
+  assert.equal(v.bankcards.length, 2);
+  assert.throws(() => V.saveBankcard(v, { name: "X", expiry: "13/28", profiles: ["p1"] }), /expiration/);
+  assert.throws(() => V.saveBankcard(v, { name: " ", profiles: ["p1"] }), /nom/);
+  assert.throws(() => V.saveBankcard(v, { name: "X", profiles: [] }), /profil/);
+  V.deleteItem(v, "bankcard", b.id, T0, sync);
+  assert.deepEqual(v.bankcards.map((x) => x.name), ["Revolut"]);
+  assert.deepEqual(v.deleted.map((t) => [t.kind, t.id]), [["bankcard", b.id]]);
+});
+
+test("cartes bancaires : coffre d'avant (sans collection) accepté", () => {
+  const v = base();
+  delete v.bankcards;
+  assert.deepEqual(V.listBankcards(v, null), []);
+  V.saveBankcard(v, { name: "Boursorama", profiles: ["p1"] });
+  assert.equal(v.bankcards.length, 1);
+});
+
+test("cartes fidélité : identifiant et PIN facultatifs, liste par profil, suppression", () => {
+  const v = base();
+  const sync = "2026-10-19T10:03:00";
+  const c = V.saveLoyaltycard(v, { name: " Leclerc ", number: " 2912345678901 ", profiles: ["p1", "p2"] }, T0, sync);
+  assert.deepEqual({ name: c.name, number: c.number, pin: c.pin, image: c.image }, { name: "Leclerc", number: "2912345678901", pin: "", image: null });
+  assert.deepEqual(Object.keys(c).sort(), ["id", "image", "name", "number", "pin", "profiles", "updated"]);
+  assert.ok(c.updated > sync);
+  V.saveLoyaltycard(v, { name: "Fnac", pin: "12", profiles: ["p2"] }, T0, sync);
+  assert.deepEqual(V.listLoyaltycards(v, "p1").map((x) => x.name), ["Leclerc"]);
+  assert.deepEqual(V.listLoyaltycards(v, null).map((x) => x.name), ["Fnac", "Leclerc"]);
+  assert.throws(() => V.saveLoyaltycard(v, { name: "", profiles: ["p1"] }), /nom/);
+  V.deleteItem(v, "loyaltycard", c.id, T0, sync);
+  assert.deepEqual(v.loyaltycards.map((x) => x.name), ["Fnac"]);
+  assert.equal(v.deleted[0].kind, "loyaltycard");
+  const old = base();
+  delete old.loyaltycards;
+  assert.deepEqual(V.listLoyaltycards(old, null), []);
 });

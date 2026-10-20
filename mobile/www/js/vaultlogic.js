@@ -1,5 +1,6 @@
 // Logique du coffre côté téléphone : mêmes règles que le PC (app/api.py, app/giftcards.py, app/textutil.py).
-// Le coffre `v` a le format de Vault.to_dict() sans settings/sync : {version, profiles, accounts, giftcards, deleted}.
+// Le coffre `v` a le format de Vault.to_dict() sans settings/sync :
+// {version, profiles, accounts, giftcards, bankcards, loyaltycards, deleted}.
 // Tout ce que ces fonctions produisent doit passer validate_phone_vault (app/syncflow.py) côté PC :
 // horodatages « AAAA-MM-JJTHH:MM:SS » (heure locale), dates « AAAA-MM-JJ », montants finis >= 0.
 //
@@ -33,7 +34,7 @@
   }
 
   function empty() {
-    return { version: 1, profiles: [], accounts: [], giftcards: [], deleted: [] };
+    return { version: 1, profiles: [], accounts: [], giftcards: [], bankcards: [], loyaltycards: [], deleted: [] };
   }
 
   // Secondes écoulées (UTC fictif, sans fuseau ni heure d'été) d'un horodatage local « AAAA-MM-JJTHH:MM:SS ».
@@ -163,12 +164,81 @@
     return card;
   }
 
-  const COLLECTIONS = { account: "accounts", giftcard: "giftcards" };
+  function listBankcards(v, profileId) {
+    return (v.bankcards || []).filter(inProfile(profileId)).sort((a, b) => {
+      const na = normalize(a.name), nb = normalize(b.name);
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+  }
+
+  // « 1228 », « 12-28 », « 12/2028 » → « 12/28 » ; vide accepté (comme app/bankcards.py check_expiry).
+  function checkExpiry(expiry) {
+    let s = str(expiry).replace(/\s+/g, "");
+    if (!s) return "";
+    const m = /^(\d{1,2})[/\-.]?(\d{2}|\d{4})$/.exec(s);
+    if (m) s = `${m[1].padStart(2, "0")}/${m[2].slice(-2)}`;
+    if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(s)) throw new Error("Date d'expiration invalide (format MM/AA)");
+    return s;
+  }
+
+  function saveBankcard(v, data, now = nowIso(), lastSync = null) {
+    const name = str(data.name).trim();
+    if (!name) throw new Error("Le nom est obligatoire");
+    if (!v.bankcards) v.bankcards = [];
+    const idx = v.bankcards.findIndex((b) => b.id === data.id);
+    const existing = idx >= 0 ? v.bankcards[idx] : null;
+    const card = {
+      id: existing ? existing.id : newId(),
+      name,
+      holder: str(data.holder).replace(/\s+/g, " ").trim(),
+      number: str(data.number).replace(/\s+/g, " ").trim(),
+      expiry: checkExpiry(data.expiry),
+      cvv: str(data.cvv).trim(),
+      pin: str(data.pin).trim(),
+      image: data.image || null,
+      profiles: checkProfiles(v, data.profiles),
+      updated: stamp(now, lastSync, existing && existing.updated),
+    };
+    if (existing) v.bankcards[idx] = card;
+    else v.bankcards.push(card);
+    return card;
+  }
+
+  function listLoyaltycards(v, profileId) {
+    return (v.loyaltycards || []).filter(inProfile(profileId)).sort((a, b) => {
+      const na = normalize(a.name), nb = normalize(b.name);
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+  }
+
+  // Carte fidélité : identifiant et PIN facultatifs (comme save_loyaltycard du PC).
+  function saveLoyaltycard(v, data, now = nowIso(), lastSync = null) {
+    const name = str(data.name).trim();
+    if (!name) throw new Error("Le nom est obligatoire");
+    if (!v.loyaltycards) v.loyaltycards = [];
+    const idx = v.loyaltycards.findIndex((c) => c.id === data.id);
+    const existing = idx >= 0 ? v.loyaltycards[idx] : null;
+    const card = {
+      id: existing ? existing.id : newId(),
+      name,
+      number: str(data.number).trim(),
+      pin: str(data.pin).trim(),
+      image: data.image || null,
+      profiles: checkProfiles(v, data.profiles),
+      updated: stamp(now, lastSync, existing && existing.updated),
+    };
+    if (existing) v.loyaltycards[idx] = card;
+    else v.loyaltycards.push(card);
+    return card;
+  }
+
+  const COLLECTIONS = { account: "accounts", giftcard: "giftcards", bankcard: "bankcards", loyaltycard: "loyaltycards" };
 
   // Retire l'élément et laisse une pierre tombale datée après sa dernière modification.
   function deleteItem(v, kind, id, now = nowIso(), lastSync = null) {
     const key = COLLECTIONS[kind];
     if (!key) throw new Error("Type inconnu");
+    if (!v[key]) v[key] = [];
     const old = v[key].find((x) => x.id === id);
     v[key] = v[key].filter((x) => x.id !== id);
     v.deleted.push({ kind, id, at: stamp(now, lastSync, old && old.updated) });
@@ -208,8 +278,8 @@
 
   root.PPM = root.PPM || {};
   root.PPM.vault = {
-    normalize, nowIso, todayIso, newId, empty, listAccounts, listGiftcards, categoryLabel,
-    saveAccount, saveGiftcard, stamp, deleteItem, spend, isFinished, expiringSoon,
+    normalize, nowIso, todayIso, newId, empty, listAccounts, listGiftcards, listBankcards, listLoyaltycards,
+    categoryLabel, saveAccount, saveGiftcard, saveBankcard, saveLoyaltycard, checkExpiry, stamp, deleteItem, spend, isFinished, expiringSoon,
   };
   if (typeof module === "object") module.exports = root.PPM.vault;
 })(typeof window !== "undefined" ? window : globalThis);

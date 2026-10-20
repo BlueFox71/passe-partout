@@ -184,6 +184,20 @@
         return false;
       },
 
+      // Code-barre d'une carte : comme scanQr (valeur de setNextQr, sinon saisie dans une fenêtre).
+      scanBarcode() {
+        return onScreen(async () => {
+          if (nextQr !== null) {
+            const t = nextQr;
+            nextQr = null;
+            return t;
+          }
+          const PP = root.PP;
+          if (!PP || !PP.modal || typeof document === "undefined") return null;
+          return askQr(PP, "Scanner le code-barre (aperçu)", "Tape le numéro inscrit sous le code-barre.");
+        });
+      },
+
       // Dans le navigateur : texte du QR saisi dans une fenêtre PP.modal ; ailleurs, valeur de setNextQr.
       scanQr() {
         return onScreen(async () => {
@@ -442,12 +456,12 @@
     } catch (e) { /* presse-papiers refusé dans l'aperçu : sans importance */ }
   }
 
-  function askQr(PP) {
+  function askQr(PP, title = "Scanner le QR code (aperçu)", hint = "Colle le texte du QR code affiché par le PC.") {
     return new Promise((resolve) => {
       let done = false;
       const m = PP.modal.open(
-        `<h2>Scanner le QR code (aperçu)</h2>
-         <p style="color:var(--muted);margin:0 0 8px">Colle le texte du QR code affiché par le PC.</p>
+        `<h2>${title}</h2>
+         <p style="color:var(--muted);margin:0 0 8px">${hint}</p>
          <textarea class="input" rows="4" style="width:100%"></textarea>
          <div class="modal-foot"><button class="btn btn-ghost" data-r="0">Annuler</button>
          <button class="btn btn-primary" data-r="1">Valider</button></div>`,

@@ -52,6 +52,12 @@
               ? `Mettre à jour ${missing.outdated} logo${missing.outdated > 1 ? "s" : ""}`
               : "Logos à jour"}</button>
           </div>
+          ${PP.logos.mine.size ? `<details class="my-logos"><summary>Tes logos de référence (${PP.logos.mine.size})</summary>
+            <p class="hint">Tes propres images, reconnues d'après le nom du compte. Elles remplacent le dessin de la bibliothèque
+              pour les nouveaux comptes et les logos manquants de la même marque.</p>
+            <div class="my-logos-list">${[...PP.logos.mine].sort((a, b) => a[0].localeCompare(b[0], "fr", { sensitivity: "base" }))
+              .map(([brand, img]) => `<div class="row">${PP.logo({ name: brand, image: img })}<div><b>${PP.esc(brand)}</b>
+                <small>d'après « ${PP.esc(PP.logos.from.get(brand))} »</small></div></div>`).join("")}</div></details>` : ""}
         </div>
 
         <div class="card glass">
@@ -170,14 +176,17 @@
   // Comptes et cartes sans image dont le nom correspond à un logo connu.
   async function missingLogos() {
     const [accs, cards] = await Promise.all([PP.call("list_accounts", null), PP.call("list_giftcards", null)]);
-    const pick = (list) => list.filter((x) => !x.image).map((x) => [x.id, PP.logos.find(x.name)]).filter((x) => x[1]);
-    // logos de la bibliothèque dessinés avec l'ancien style (image identique au rendu version 1)
+    const pick = (list) => list.filter((x) => !x.image).map((x) => [x.id, PP.logos.brandOf(x.name)]).filter((x) => x[1]);
+    // logos de la bibliothèque dessinés avec l'ancien style (image identique au rendu version 1),
+    // ou dessinés alors qu'une image est désormais livrée pour la marque (ui/logos-perso.js)
     const old = async (list) => {
       const out = [];
       for (const x of list) {
         const e = x.image && PP.logos.find(x.name);
         if (!e || x.image === PP.logos.render(e)) continue;
-        if (x.image === PP.logos.render(e, 1) || await PP.logos.similar(x.image, PP.logos.render(e, 1)))
+        const shipped = PP.logos.render(e) !== PP.logos.draw(e);
+        if (x.image === PP.logos.draw(e, 1) || await PP.logos.similar(x.image, PP.logos.draw(e, 1))
+            || (shipped && (x.image === PP.logos.draw(e) || await PP.logos.similar(x.image, PP.logos.draw(e)))))
           out.push([x.id, [x.image, PP.logos.render(e)]]);
       }
       return out;
@@ -197,7 +206,7 @@
   async function applyMissingLogos() {
     const m = await missingLogos();
     if (!m.count) return 0;
-    const map = (list) => Object.fromEntries(list.map(([id, e]) => [id, PP.logos.render(e)]));
+    const map = (list) => Object.fromEntries(list.map(([id, e]) => [id, PP.logos.image(e)]));
     return PP.call("set_images", map(m.accounts), map(m.giftcards));
   }
 

@@ -43,6 +43,39 @@
         if (!index) build();
         return index.get(PP.normalize(name)) || null;
       },
+      // Marque d'un nom de compte, même avec des mots en plus : « Twitter / X » → X (chaque partie
+      // autour d'un « / »), « Apple turquie » → Apple (début du nom le plus long qui est une marque).
+      // « Banque Compte Jules » ne donne rien.
+      brandOf(name) {
+        const exact = this.find(name);
+        if (exact) return exact;
+        for (const part of String(name ?? "").split("/").map((s) => s.trim()).filter(Boolean).reverse()) {
+          const words = part.split(/\s+/);
+          for (let n = words.length; n >= 1; n--) {
+            const e = this.find(words.slice(0, n).join(" "));
+            if (e) return e;
+          }
+        }
+        return null;
+      },
+      // Tes propres images, par marque (titre → data URL), tirées des comptes et cartes : elles passent
+      // avant le dessin de la bibliothèque. Remplies par l'écran principal à chaque chargement.
+      mine: new Map(),
+      image(e) { return this.mine.get(e[0]) || this.render(e); },
+      // Une image est « à toi » si ce n'est ni un logo livré ni un dessin de la bibliothèque (style actuel ou ancien).
+      learn(items) {
+        const mine = new Map(), from = new Map();
+        const sorted = [...items].sort((a, b) => String(a.updated || "").localeCompare(String(b.updated || "")));
+        for (const x of sorted) {
+          const e = x.image && this.brandOf(x.name);
+          if (!e || x.image === this.render(e) || x.image === this.draw(e) || x.image === this.draw(e, 1)) continue;
+          mine.set(e[0], x.image); // la plus récente gagne
+          from.set(e[0], x.name);
+        }
+        this.mine = mine;
+        this.from = from;
+      },
+      from: new Map(), // titre → nom du compte ou de la carte d'où vient l'image
       // Suggestions : exact, puis début du nom, puis début d'un mot, puis contenu ; marques courantes d'abord.
       suggest(query, limit = 8) {
         const q = PP.normalize(query);
@@ -82,10 +115,16 @@
         for (let i = 0; i < pa.length; i++) diff += Math.abs(pa[i] - pb[i]);
         return diff / pa.length < 6;
       },
-      // Rend le logo en PNG carré 256 px (data URL).
+      // Logo de la marque (data URL) : l'image livrée dans ui/logos-perso.js s'il y en a une, sinon le dessin.
+      // Les anciennes versions (version 1) restent des dessins : elles servent à reconnaître les anciens logos.
+      render(e, version = 2) {
+        const img = version >= 2 && (window.PP_LOGO_IMAGES || {})[e[0]];
+        return img || this.draw(e, version);
+      },
+      // Dessine le logo en PNG carré 256 px (data URL).
       // Version 2 : dessin blanc (cerné de sombre si le fond est clair), couleurs officielles pour
       // quelques marques. La version 1 (dessin noir sur fond clair) sert à reconnaître les anciens logos.
-      render(e, version = 2) {
+      draw(e, version = 2) {
         const key = version + "|" + e[0];
         if (cache.has(key)) return cache.get(key);
         const [, hex0, path, , , letters] = e;
@@ -217,6 +256,9 @@
     image: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>'),
     users: svg('<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/>'),
     back: svg('<path d="M15 18l-6-6 6-6"/>'),
+    next: svg('<path d="M9 18l6-6-6-6"/>'),
+    barcode: svg('<path d="M4 6v12M7 6v12M11 6v12M14 6v12M18 6v12M20 6v12"/>'),
+    card: svg('<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10h20M6 15h4"/>'),
     sync: svg('<path d="M7 20V4M3 8l4-4 4 4"/><path d="M17 4v16m-4-4 4 4 4-4"/>'),
     phone: svg('<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>'),
     select: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>'),
@@ -236,6 +278,57 @@
       </g></svg>`;
   };
   PP.brand = (cls = "") => `<div class="brand ${cls}">${PP.brandSvg()}<span>Passe-Partout</span></div>`;
+
+  /* ---------- cartes bancaires : dessin et mise en forme (PC et téléphone) ---------- */
+  const B = (PP.bankcard = {});
+  // Réseau d'après le numéro : Visa, Mastercard, American Express ; "" si inconnu.
+  B.network = (number) => {
+    const d = String(number || "").replace(/\D/g, "");
+    if (/^4/.test(d)) return "VISA";
+    if (/^5[1-5]/.test(d) || /^2(2[2-9]|[3-6]\d|7[01]|720)/.test(d)) return "Mastercard";
+    if (/^3[47]/.test(d)) return "AMEX";
+    return "";
+  };
+  B.digits = (n) => String(n || "").replace(/[\s-]/g, "");
+  const digits = B.digits;
+  // « 4970123456781234 » → « 4970 1234 5678 1234 » (American Express : 4-6-5)
+  B.formatNumber = (n) => {
+    const d = digits(n);
+    if (!/^\d+$/.test(d)) return String(n || "");
+    const groups = /^3[47]/.test(d) ? [4, 6, 5] : [4, 4, 4, 4, 3];
+    const out = [];
+    let i = 0;
+    for (const g of groups) { if (i >= d.length) break; out.push(d.slice(i, i + g)); i += g; }
+    if (i < d.length) out.push(d.slice(i));
+    return out.join(" ");
+  };
+  const last4 = (n) => digits(n).slice(-4);
+
+  // Couleur de la carte : celle de la marque si la société est connue, sinon celle du nom.
+  function colorOf(b) {
+    const e = PP.logos.brandOf(b.name);
+    return e ? "#" + e[1] : PP.colorFor(b.name || "?");
+  }
+  // Logo : l'image de la carte, sinon celui de la société s'il est connu.
+  B.logo = (b, cls = "") => {
+    const e = !b.image && PP.logos.brandOf(b.name);
+    return PP.logo(e ? { ...b, image: PP.logos.image(e) } : b, cls);
+  };
+
+  // Carte dessinée ; `big` pour la fiche.
+  B.visual = (b, big = false) => {
+    const c = colorOf(b);
+    const net = B.network(b.number);
+    return `<div class="bc-visual ${big ? "big" : ""}" style="background:linear-gradient(135deg,${c},${PP.shade(c)})">
+      <div class="bc-top">${B.logo(b)}<b>${PP.esc(b.name)}</b></div>
+      <div class="bc-num">•••• •••• •••• ${PP.esc(last4(b.number) || "····")}</div>
+      <div class="bc-bot">
+        <div class="bc-holder"><small>Titulaire</small>${PP.esc(b.holder || "—")}</div>
+        <div><small>Expire</small>${PP.esc(b.expiry || "—")}</div>
+        ${net ? `<b class="bc-net">${net}</b>` : ""}
+      </div>
+    </div>`;
+  };
 
   /* ---------- toasts et modales ---------- */
   PP.toast = (msg, { error = false, seconds = 2.6, bar = 0 } = {}) => {
@@ -336,6 +429,8 @@
   PP.refreshState = async () => {
     const s = await PP.call("get_state");
     Object.assign(PP.state, s);
+    const n = s.converted_cards;
+    if (n) PP.toast(`${n} compte${n > 1 ? "s convertis" : " converti"} en carte${n > 1 ? "s" : ""} bancaire${n > 1 ? "s" : ""} (voir « Cartes bancaires »)`, { seconds: 8 });
     return s;
   };
 

@@ -47,7 +47,7 @@
   // Mêmes règles minimales que validate_phone_vault (app/syncflow.py) : ce coffre sera renvoyé au PC.
   const TS_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
   const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-  const KINDS = ["account", "giftcard", "profile"];
+  const KINDS = ["account", "giftcard", "bankcard", "loyaltycard", "profile"];
 
   function invalid() {
     throw new Error("Réponse de synchronisation invalide");
@@ -109,7 +109,9 @@
 
   function validateVault(rv) {
     if (!isObj(rv)) invalid();
-    for (const k of ["profiles", "accounts", "giftcards", "deleted"]) if (!Array.isArray(rv[k])) invalid();
+    // absentes : coffre sans carte bancaire ni fidélité
+    for (const k of ["bankcards", "loyaltycards"]) if (!(k in rv)) rv[k] = [];
+    for (const k of ["profiles", "accounts", "giftcards", "bankcards", "loyaltycards", "deleted"]) if (!Array.isArray(rv[k])) invalid();
     for (const p of rv.profiles) {
       checkItem(p, [], ["avatar", "color"]);
       checkImage(p, "avatar");
@@ -137,13 +139,23 @@
         checkAmount(h.amount, true);
       }
     }
+    for (const b of rv.bankcards) {
+      checkItem(b, ["holder", "number", "expiry", "cvv", "pin"], []);
+      checkImage(b, "image");
+      checkProfileIds(b);
+    }
+    for (const c of rv.loyaltycards) {
+      checkItem(c, ["number", "pin"], []);
+      checkImage(c, "image");
+      checkProfileIds(c);
+    }
     for (const t of rv.deleted) {
       if (!isObj(t) || !KINDS.includes(t.kind)) invalid();
       onlyKeys(t, ["kind", "id", "at"]);
       checkStr(t, "id", { required: true });
       checkTs(t.at);
     }
-    for (const k of ["profiles", "accounts", "giftcards"]) {
+    for (const k of ["profiles", "accounts", "giftcards", "bankcards", "loyaltycards"]) {
       const ids = rv[k].map((x) => x.id);
       if (new Set(ids).size !== ids.length) invalid();
     }
@@ -530,6 +542,30 @@
       return this._modify((v, d, last) => { V.deleteItem(v, "giftcard", id, V.nowIso(d), last); });
     }
 
+    list_bankcards(profileId) {
+      return this._run(async () => clone(V.listBankcards(this._v(), profileId ?? null)));
+    }
+
+    save_bankcard(data) {
+      return this._modify((v, d, last) => V.saveBankcard(v, data || {}, V.nowIso(d), last));
+    }
+
+    delete_bankcard(id) {
+      return this._modify((v, d, last) => { V.deleteItem(v, "bankcard", id, V.nowIso(d), last); });
+    }
+
+    list_loyaltycards(profileId) {
+      return this._run(async () => clone(V.listLoyaltycards(this._v(), profileId ?? null)));
+    }
+
+    save_loyaltycard(data) {
+      return this._modify((v, d, last) => V.saveLoyaltycard(v, data || {}, V.nowIso(d), last));
+    }
+
+    delete_loyaltycard(id) {
+      return this._modify((v, d, last) => { V.deleteItem(v, "loyaltycard", id, V.nowIso(d), last); });
+    }
+
     spend(id, amount) {
       return this._modify((v, d, last) => V.spend(v, id, amount, V.todayIso(d), V.nowIso(d), last));
     }
@@ -612,9 +648,12 @@
     sync_payload() {
       return this._run(async () => {
         this._syncRev = this._rev;
-        if (!this._hasData) return { profiles: [], accounts: [], giftcards: [], deleted: [] };
+        if (!this._hasData) return { profiles: [], accounts: [], giftcards: [], bankcards: [], loyaltycards: [], deleted: [] };
         const v = this._v();
-        return clone({ profiles: v.profiles, accounts: v.accounts, giftcards: v.giftcards, deleted: v.deleted });
+        return clone({
+          profiles: v.profiles, accounts: v.accounts, giftcards: v.giftcards, bankcards: v.bankcards || [],
+          loyaltycards: v.loyaltycards || [], deleted: v.deleted,
+        });
       });
     }
 
@@ -650,7 +689,8 @@
           newKey = true;
         }
         const vault = {
-          version: 1, profiles: rv.profiles, accounts: rv.accounts, giftcards: rv.giftcards, deleted: rv.deleted,
+          version: 1, profiles: rv.profiles, accounts: rv.accounts, giftcards: rv.giftcards, bankcards: rv.bankcards,
+          loyaltycards: rv.loyaltycards, deleted: rv.deleted,
         };
         // nouveau secret après une synchro avec code ; sinon celui déjà gardé (même clé de données)
         const keep = !newKey && this._vault && isPair(this._vault.pair) ? this._vault.pair : null;

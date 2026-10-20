@@ -1,4 +1,4 @@
-"""Modèle de données : profils, comptes, cartes cadeaux et coffre complet."""
+"""Modèle de données : profils, comptes, cartes cadeaux, bancaires et fidélité, et coffre complet."""
 from __future__ import annotations
 
 import json
@@ -63,6 +63,31 @@ class GiftCard:
     updated: str = field(default_factory=now_iso)
 
 
+@dataclass
+class BankCard:
+    id: str
+    name: str  # société (banque…)
+    holder: str = ""
+    number: str = ""
+    expiry: str = ""  # "MM/AA" ou vide
+    cvv: str = ""
+    pin: str = ""
+    image: str | None = None
+    profiles: list[str] = field(default_factory=list)
+    updated: str = field(default_factory=now_iso)
+
+
+@dataclass
+class LoyaltyCard:
+    id: str
+    name: str  # enseigne
+    number: str = ""  # identifiant (souvent le numéro du code-barre)
+    pin: str = ""
+    image: str | None = None
+    profiles: list[str] = field(default_factory=list)
+    updated: str = field(default_factory=now_iso)
+
+
 def tombstone(kind: str, item_id: str, at: str) -> dict:
     """Pierre tombale : trace d'une suppression, pour que la synchro la propage au téléphone."""
     return {"kind": kind, "id": item_id, "at": at}
@@ -73,6 +98,8 @@ class Vault:
     profiles: list[Profile] = field(default_factory=list)
     accounts: list[Account] = field(default_factory=list)
     giftcards: list[GiftCard] = field(default_factory=list)
+    bankcards: list[BankCard] = field(default_factory=list)
+    loyaltycards: list[LoyaltyCard] = field(default_factory=list)
     settings: dict = field(default_factory=lambda: dict(DEFAULT_SETTINGS))
     deleted: list[dict] = field(default_factory=list)  # pierres tombales
     sync: dict = field(default_factory=lambda: {"devices": {}})
@@ -83,6 +110,8 @@ class Vault:
             "profiles": [asdict(p) for p in self.profiles],
             "accounts": [asdict(a) for a in self.accounts],
             "giftcards": [asdict(g) for g in self.giftcards],
+            "bankcards": [asdict(b) for b in self.bankcards],
+            "loyaltycards": [asdict(c) for c in self.loyaltycards],
             "settings": dict(self.settings),
             "deleted": [dict(t) for t in self.deleted],
             "sync": json.loads(json.dumps(self.sync)),
@@ -98,6 +127,8 @@ class Vault:
             profiles=[_from_dict(Profile, p) for p in d.get("profiles", [])],
             accounts=[_from_dict(Account, a) for a in d.get("accounts", [])],
             giftcards=giftcards,
+            bankcards=[_from_dict(BankCard, b) for b in d.get("bankcards", [])],
+            loyaltycards=[_from_dict(LoyaltyCard, c) for c in d.get("loyaltycards", [])],
             settings={**DEFAULT_SETTINGS, **d.get("settings", {})},
             deleted=[dict(t) for t in d.get("deleted", [])],
             sync={"devices": {}, **json.loads(json.dumps(d.get("sync") or {}))},

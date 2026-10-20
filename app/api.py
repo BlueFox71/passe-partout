@@ -21,6 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app import apk as apk_mod
+from app import bankcards as bc_logic
 from app import giftcards as gc_logic
 from app.apkserve import APK_SECONDS, ApkServer
 from app.crypto import CryptoError
@@ -28,7 +29,7 @@ from app.exporter import export_png, export_text
 from app.images import normalize_image as _normalize_image
 from app.importer import import_xlsx
 from app.lockout import Lockout
-from app.model import Account, GiftCard, Profile, Vault, new_id, now_iso, tombstone
+from app.model import Account, BankCard, GiftCard, LoyaltyCard, Profile, Vault, new_id, now_iso, tombstone
 from app.store import VaultCorrupt, VaultStore
 from app.sync import SYNC_SECONDS, SyncServer, SyncSession, b64u, private_ipv4s, qr_svg
 from app.syncflow import SyncFlow
@@ -108,11 +109,26 @@ class Api:
         self._lockout = Lockout(wall_clock)
         self._lockout.restore(self._config.get("lockout") or {})
         self._corrupt = False
+        self._converted = 0  # comptes convertis en cartes bancaires, annoncés une fois par get_state
         if store.exists() and not store.is_encrypted():
             try:
                 store.load(None)
+                self._after_load()
             except VaultCorrupt:
                 self._corrupt = True
+
+    def _after_load(self) -> None:
+        """Une seule fois par coffre : les comptes qui sont des cartes bancaires deviennent des cartes."""
+        v = self._store.vault
+        if v is None or v.settings.get("cards_converted"):
+            return
+        n = bc_logic.convert_accounts(v, now_iso())
+        v.settings["cards_converted"] = True
+        try:
+            self._store.save(v, backup=n > 0)  # sauvegarde automatique avant la conversion
+        except OSError:
+            return  # réessayé au prochain chargement
+        self._converted += n
 
     # ---------------------------------------------------------------- configuration en clair
     def _read_config(self) -> dict:
@@ -164,8 +180,10 @@ class Api:
         profiles = [asdict(p) for p in self._store.vault.profiles] if self._store.vault else []
         mode = self._lock_mode() if has_data else "none"
         pin_length = self._config.get("pin_length") if mode == "pin" else None
+        converted, self._converted = (self._converted, 0) if self._store.vault else (0, self._converted)
         return {"locked": locked, "lock_mode": mode, "pin_length": pin_length,
-                "has_data": has_data, "corrupt": self._corrupt, "profiles": profiles}
+                "has_data": has_data, "corrupt": self._corrupt, "profiles": profiles,
+                "converted_cards": converted}
 
     @_locked
     def unlock(self, code: str) -> dict:
@@ -182,6 +200,7 @@ class Api:
             self._corrupt = True
             return {"ok": False, "wait_seconds": 0, "error": "corrupt"}
         self._lockout.success()
+        self._after_load()
         if self._lock_mode() == "pin" and str(code).isdigit():
             # longueur du PIN, pour valider automatiquement la saisie au prochain déverrouillage
             self._config["pin_length"] = len(str(code))
@@ -273,6 +292,7 @@ class Api:
         self._corrupt = False
         try:
             self._store.reload()
+            self._after_load()
         except CryptoError:
             self._store.forget_key()  # sauvegarde d'un autre code : il faudra le saisir
         except VaultCorrupt:
@@ -418,6 +438,85 @@ class Api:
         self._save()
         return asdict(new)
 
+    # ---------------------------------------------------------------- cartes bancaires
+    @_locked
+    def list_bankcards(self, profile_id: str | None) -> list[dict]:
+        items = [b for b in self._vault().bankcards if self._in_profile(profile_id)(b)]
+        items.sort(key=lambda b: (normalize(b.name), normalize(b.holder)))
+        return [asdict(b) for b in items]
+
+    @_locked
+    def save_bankcard(self, data: dict) -> dict:
+        v = self._vault()
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ValueError("Le nom est obligatoire")
+        existing = next((b for b in v.bankcards if b.id == data.get("id")), None)
+        card = BankCard(
+            id=existing.id if existing else new_id(),
+            name=name,
+            holder=re.sub(r"\s+", " ", str(data.get("holder") or "")).strip(),
+            number=re.sub(r"\s+", " ", str(data.get("number") or "")).strip(),
+            expiry=bc_logic.check_expiry(data.get("expiry")),
+            cvv=str(data.get("cvv") or "").strip(),
+            pin=str(data.get("pin") or "").strip(),
+            image=data.get("image") or None,
+            profiles=self._check_profiles(data.get("profiles")),
+            updated=now_iso(),
+        )
+        if existing:
+            v.bankcards[v.bankcards.index(existing)] = card
+        else:
+            v.bankcards.append(card)
+        self._save()
+        return asdict(card)
+
+    @_locked
+    def delete_bankcard(self, card_id: str) -> dict:
+        v = self._vault()
+        v.bankcards = [b for b in v.bankcards if b.id != card_id]
+        v.deleted.append(tombstone("bankcard", card_id, now_iso()))
+        self._save()
+        return {}
+
+    # ---------------------------------------------------------------- cartes fidélité
+    @_locked
+    def list_loyaltycards(self, profile_id: str | None) -> list[dict]:
+        items = [c for c in self._vault().loyaltycards if self._in_profile(profile_id)(c)]
+        items.sort(key=lambda c: normalize(c.name))
+        return [asdict(c) for c in items]
+
+    @_locked
+    def save_loyaltycard(self, data: dict) -> dict:
+        v = self._vault()
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ValueError("Le nom est obligatoire")
+        existing = next((c for c in v.loyaltycards if c.id == data.get("id")), None)
+        card = LoyaltyCard(
+            id=existing.id if existing else new_id(),
+            name=name,
+            number=str(data.get("number") or "").strip(),
+            pin=str(data.get("pin") or "").strip(),
+            image=data.get("image") or None,
+            profiles=self._check_profiles(data.get("profiles")),
+            updated=now_iso(),
+        )
+        if existing:
+            v.loyaltycards[v.loyaltycards.index(existing)] = card
+        else:
+            v.loyaltycards.append(card)
+        self._save()
+        return asdict(card)
+
+    @_locked
+    def delete_loyaltycard(self, card_id: str) -> dict:
+        v = self._vault()
+        v.loyaltycards = [c for c in v.loyaltycards if c.id != card_id]
+        v.deleted.append(tombstone("loyaltycard", card_id, now_iso()))
+        self._save()
+        return {}
+
     # ---------------------------------------------------------------- profils
     @_locked
     def save_profile(self, data: dict) -> dict:
@@ -445,7 +544,7 @@ class Api:
             raise ValueError("Il faut garder au moins un profil")
         if reassign_to == profile_id or reassign_to not in self._profile_ids():
             raise ValueError("Choisis un autre profil pour récupérer les comptes")
-        for item in [*v.accounts, *v.giftcards]:
+        for item in [*v.accounts, *v.giftcards, *v.bankcards, *v.loyaltycards]:
             if profile_id in item.profiles:
                 item.profiles = [p for p in item.profiles if p != profile_id] or [reassign_to]
                 item.updated = now_iso()

@@ -94,7 +94,7 @@
       if (!items.length) return close();
       if (!box) { box = document.createElement("div"); box.className = "suggest"; wrap.appendChild(box); }
       box.innerHTML = items.map((e, i) => `<div class="opt ${i === cur ? "on" : ""}" data-i="${i}">
-          <div class="logo img"><img src="${PP.esc(PP.logos.render(e))}" alt=""></div>${PP.esc(e[0])}</div>`).join("");
+          <div class="logo img"><img src="${PP.esc(PP.logos.image(e))}" alt=""></div>${PP.esc(e[0])}</div>`).join("");
       box.querySelectorAll(".opt").forEach((o) => o.addEventListener("mousedown", (ev) => { ev.preventDefault(); pick(items[+o.dataset.i]); }));
     };
     input.setAttribute("autocomplete", "off");
@@ -102,7 +102,7 @@
       items = PP.logos.suggest(input.value);
       cur = -1;
       draw();
-      onLogo(PP.logos.find(input.value), false);
+      onLogo(PP.logos.brandOf(input.value), false);
     });
     input.addEventListener("keydown", (ev) => {
       if (!box) return;
@@ -120,9 +120,10 @@
     let auto = false;
     V.logoSuggest(input, (entry, explicit) => {
       if (entry && (explicit || !item.image || auto)) {
-        item.image = PP.logos.render(entry);
+        const mine = PP.logos.mine.has(entry[0]);
+        item.image = PP.logos.image(entry);
         auto = true;
-        hint.textContent = `Logo « ${entry[0]} » ajouté — tu peux le changer ci-dessous.`;
+        hint.textContent = `${mine ? "Ton logo" : "Logo"} « ${entry[0]} » ajouté — tu peux le changer ci-dessous.`;
       } else if (!entry && auto) {
         item.image = null;
         auto = false;
@@ -147,7 +148,8 @@
 
   V.defaultProfiles = () => new Set([S.profileId ?? S.profiles[0].id]);
 
-  V.openAccount = (account, presetCategory = "") => {
+  // `back(id)` : rouvre ce d'où l'on vient (la fiche en fenêtre) après « Enregistrer » ou « Annuler ».
+  V.openAccount = (account, presetCategory = "", { back = null } = {}) => {
     const a = account
       ? { ...account }
       : { id: null, name: "", category: presetCategory, login: "", password: "", login_mask: null, password_mask: null, image: null, favorite: false, profiles: [] };
@@ -209,7 +211,7 @@
     logo = V.autoLogo($("#f-name"), a, zone, $("#f-hint"));
     V.profileChecks($("#f-profs"), profs);
     $("#f-fav").addEventListener("click", (e) => { e.preventDefault(); a.favorite = !a.favorite; $("#f-fav").classList.toggle("on", a.favorite); });
-    $("#f-cancel").addEventListener("click", () => PP.modal.close());
+    $("#f-cancel").addEventListener("click", () => (back ? back(account.id) : PP.modal.close()));
     $("#f-name").focus();
 
     const save = async () => {
@@ -233,6 +235,7 @@
       }
       PP.views.main.select(saved.id);
       await PP.views.main.afterChange();
+      if (back) back(saved.id);
     };
     $("#f-save").addEventListener("click", save);
     m.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.ctrlKey) save(); });

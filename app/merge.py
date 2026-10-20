@@ -17,9 +17,12 @@ TOMBSTONE_DAYS = 180
 _NOT_CONFLICT = {
     "account": frozenset({"id", "updated", "created", "favorite"}),
     "giftcard": frozenset({"id", "updated", "history", "remaining"}),
+    "bankcard": frozenset({"id", "updated"}),
+    "loyaltycard": frozenset({"id", "updated"}),
 }
 _COPY_SUFFIX = {"pc": " (copie PC)", "phone": " (copie téléphone)"}
-_KINDS = (("profile", "profiles"), ("account", "accounts"), ("giftcard", "giftcards"))
+_KINDS = (("profile", "profiles"), ("account", "accounts"), ("giftcard", "giftcards"),
+          ("bankcard", "bankcards"), ("loyaltycard", "loyaltycards"))
 
 
 @dataclass
@@ -146,7 +149,7 @@ def merge(pc: Vault, phone: Vault, last_sync: str | None, now: str) -> MergeResu
     tombstones = [t for key, t in graves.items() if key not in survivors and t["at"] >= cutoff]
 
     vault = Vault(profiles=merged["profiles"], accounts=merged["accounts"], giftcards=merged["giftcards"],
-                  settings=pc.settings, deleted=tombstones, sync=pc.sync)
+                  bankcards=merged["bankcards"], loyaltycards=merged["loyaltycards"], settings=pc.settings, deleted=tombstones, sync=pc.sync)
     to_pc = sum(_changes(getattr(orig_pc, attr), merged[attr]) for _, attr in _KINDS)
     to_phone = sum(_changes(getattr(orig_phone, attr), merged[attr]) for _, attr in _KINDS)
     return MergeResult(vault=vault, to_pc=to_pc, to_phone=to_phone, deleted=deleted, conflicts=conflicts)

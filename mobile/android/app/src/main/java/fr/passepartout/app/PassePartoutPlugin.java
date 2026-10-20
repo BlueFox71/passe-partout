@@ -392,7 +392,7 @@ public class PassePartoutPlugin extends Plugin {
         });
     }
 
-    // ------------------------------------------------------------------ QR code (ZXing, sans service Google)
+    // ------------------------------------------------------------------ QR code et codes-barres (ZXing, sans service Google)
 
     @PluginMethod
     public void scanQr(PluginCall call) {
@@ -403,20 +403,39 @@ public class PassePartoutPlugin extends Plugin {
         launchScanner(call);
     }
 
+    // Code-barres d'une carte de fidélité (EAN, UPC, Code 128…, ou QR / Data Matrix / PDF417).
+    @PluginMethod
+    public void scanBarcode(PluginCall call) {
+        scanQr(call); // même permission ; launchScanner choisit les formats d'après le nom de la méthode
+    }
+
     @PermissionCallback
     private void cameraPermission(PluginCall call) {
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             launchScanner(call);
         } else {
-            call.reject("Passe-Partout a besoin de l'appareil photo pour lire le QR code du PC. "
+            call.reject("Passe-Partout a besoin de l'appareil photo pour " + scanPurpose(call) + ". "
                 + "Autorise-le dans les réglages Android (Applis > Passe-Partout > Autorisations).", "CAMERA_DENIED");
         }
     }
 
+    private static boolean isBarcode(PluginCall call) {
+        return "scanBarcode".equals(call.getMethodName());
+    }
+
+    private static String scanPurpose(PluginCall call) {
+        return isBarcode(call) ? "lire le code-barre de la carte" : "lire le QR code du PC";
+    }
+
     private void launchScanner(PluginCall call) {
         ScanOptions opts = new ScanOptions();
-        opts.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
-        opts.setPrompt("Vise le QR code affiché sur le PC");
+        if (isBarcode(call)) {
+            opts.setDesiredBarcodeFormats(ScanOptions.ALL_CODE_TYPES);
+            opts.setPrompt("Vise le code-barre de la carte");
+        } else {
+            opts.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+            opts.setPrompt("Vise le QR code affiché sur le PC");
+        }
         opts.setBeepEnabled(false);
         opts.setOrientationLocked(true); // portrait (voir AndroidManifest.xml)
         opts.setCaptureActivity(SecureCaptureActivity.class); // captures d'écran bloquées pendant le scan
@@ -433,7 +452,7 @@ public class PassePartoutPlugin extends Plugin {
         if (text == null) {
             Intent original = r.getOriginalIntent();
             if (original != null && original.hasExtra(com.google.zxing.client.android.Intents.Scan.MISSING_CAMERA_PERMISSION)) {
-                call.reject("Passe-Partout a besoin de l'appareil photo pour lire le QR code du PC.", "CAMERA_DENIED");
+                call.reject("Passe-Partout a besoin de l'appareil photo pour " + scanPurpose(call) + ".", "CAMERA_DENIED");
                 return;
             }
             out.put("text", null); // scan annulé

@@ -66,7 +66,7 @@ test("avant la première synchro : pas de données, pas verrouillé", async () =
   assert.equal(info.code_version, null);
   assert.equal(typeof info.device_name, "string");
   assert.equal(info.now, "2026-10-19T12:00:00");
-  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], deleted: [] });
+  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], bankcards: [], loyaltycards: [], deleted: [] });
 });
 
 test("device_id créé une fois et conservé", async () => {
@@ -241,7 +241,7 @@ test("delete_account puis sync_payload contient la pierre tombale", async () => 
   const { api } = await synced();
   await api.delete_account("a1");
   const p = await api.sync_payload();
-  assert.deepEqual(Object.keys(p).sort(), ["accounts", "deleted", "giftcards", "profiles"]);
+  assert.deepEqual(Object.keys(p).sort(), ["accounts", "bankcards", "deleted", "giftcards", "loyaltycards", "profiles"]);
   assert.equal(p.accounts.length, 0);
   assert.equal(p.deleted.length, 1);
   assert.equal(p.deleted[0].kind, "account");
@@ -368,7 +368,7 @@ test("clé du Keystore perdue → état corrompu → resynchro avec le code → 
   assert.equal(info.code_version, null);
   assert.equal(info.generation, null);
   assert.equal(info.last_sync, null);
-  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], deleted: [] });
+  assert.deepEqual(await api.sync_payload(), { profiles: [], accounts: [], giftcards: [], bankcards: [], loyaltycards: [], deleted: [] });
   await assert.rejects(api.apply_sync(pcResp(), null), /code/i);
   // le PC exige le code et remplace
   await api.apply_sync(pcResp({ synced_at: "2026-10-19T12:00:00" }), "4321");
@@ -653,4 +653,51 @@ test("nativeFake : APK refusé (INVALID_APK, Ruling 5) : rien d'installé, écra
     { code: "INVALID_APK", message: "Mise à jour invalide." });
   assert.deepEqual(native.installed, []);
   assert.equal(native.inNativeScreen(), false);
+});
+
+test("cartes bancaires : reçues du PC, modifiées sur le téléphone, renvoyées au PC", async () => {
+  const s = setup();
+  const resp = pcResp();
+  resp.vault.bankcards = [{ id: "b1", name: "Boursorama", holder: "JULES", number: "4970 1234 5678 1234",
+    expiry: "12/28", cvv: "123", pin: "4321", image: null, profiles: ["p1"], updated: T0 }];
+  await s.api.apply_sync(resp, "1234");
+  assert.deepEqual((await s.api.list_bankcards(null)).map((b) => b.name), ["Boursorama"]);
+  const saved = await s.api.save_bankcard({ name: "Revolut", expiry: "0327", profiles: ["p1"] });
+  assert.equal(saved.expiry, "03/27");
+  await s.api.delete_bankcard("b1");
+  const p = await s.api.sync_payload();
+  assert.deepEqual(p.bankcards.map((b) => b.name), ["Revolut"]);
+  assert.deepEqual(p.deleted.map((t) => [t.kind, t.id]), [["bankcard", "b1"]]);
+  assert.ok(!(await s.native.readFile("vault.enc")).includes("4321")); // chiffré sur le téléphone
+});
+
+test("cartes bancaires invalides reçues du PC : refusées sans rien écrire", async () => {
+  const { api } = await synced();
+  const bad = (patch) => {
+    const r = pcResp();
+    r.vault.bankcards = [{ id: "b1", name: "Bourso", holder: "", number: "", expiry: "", cvv: "", pin: "",
+      image: null, profiles: ["p1"], updated: T0, ...patch }];
+    return r;
+  };
+  for (const r of [bad({ cvv: 123 }), bad({ profiles: "p1" }), bad({ updated: "hier" }), bad({ image: "http://x" }),
+    (() => { const r = pcResp(); r.vault.bankcards = {}; return r; })()]) {
+    await assert.rejects(api.apply_sync(r, "5678"), /Réponse de synchronisation invalide/);
+  }
+  assert.deepEqual(await api.list_bankcards(null), []);
+});
+
+test("cartes fidélité : reçues du PC, ajoutées sur le téléphone, renvoyées ; invalides refusées", async () => {
+  const s = setup();
+  const resp = pcResp();
+  resp.vault.loyaltycards = [{ id: "l1", name: "Leclerc", number: "2912345678901", pin: "", image: null,
+    profiles: ["p1"], updated: T0 }];
+  await s.api.apply_sync(resp, "1234");
+  await s.api.save_loyaltycard({ name: "Fnac", pin: "4821", profiles: ["p1"] });
+  await s.api.delete_loyaltycard("l1");
+  const p = await s.api.sync_payload();
+  assert.deepEqual(p.loyaltycards.map((c) => c.name), ["Fnac"]);
+  assert.deepEqual(p.deleted.map((t) => [t.kind, t.id]), [["loyaltycard", "l1"]]);
+  const bad = pcResp();
+  bad.vault.loyaltycards = [{ id: "l1", name: "Leclerc", number: 2912, pin: "", image: null, profiles: ["p1"], updated: T0 }];
+  await assert.rejects(s.api.apply_sync(bad, "1234"), /Réponse de synchronisation invalide/);
 });

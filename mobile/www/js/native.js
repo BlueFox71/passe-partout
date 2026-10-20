@@ -243,6 +243,16 @@
       }
     },
 
+    // Code-barre d'une carte (EAN, Code 128…), même contrat que scanQr.
+    async scanBarcode() {
+      try {
+        const r = await onScreen(() => PassePartout.scanBarcode());
+        return r && typeof r.text === "string" ? r.text : null;
+      } catch (e) {
+        throw coded(e, ["CAMERA_DENIED", "FAILED"]);
+      }
+    },
+
     // ------------------------------------------------------------ mise à jour de l'appli
     // APK vérifié (octets) → cache de l'appli → installateur d'Android. Se termine au retour dans l'appli.
     // Error.code « INSTALL_PERMISSION » : l'écran d'autorisation d'Android a été montré, réessayer ensuite.
